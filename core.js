@@ -6,21 +6,38 @@
   const cents = (n) => Math.round(n * 100) / 100;
   const fromB64 = (s) => { const b = atob(s), u = new Uint8Array(b.length); for (let i = 0; i < b.length; i++) u[i] = b.charCodeAt(i); return u; };
 
-  /* ---------- crypto ---------- */
-  async function open(text, pass, subtle) {
+  /* ---------- crypto: one file layout {v:1,salt,iv,ct} for .aaib bundles and .aaio outboxes ---------- */
+  const toB64 = (u8) => { let s = ''; u8.forEach((b) => { s += String.fromCharCode(b); }); return btoa(s); };
+  const aesKey = async (pass, salt, use, subtle) => {
+    const base = await subtle.importKey('raw', new TextEncoder().encode(pass), 'PBKDF2', false, ['deriveKey']);
+    return subtle.deriveKey({ name: 'PBKDF2', salt, iterations: ITER, hash: 'SHA-256' }, base, { name: 'AES-GCM', length: 256 }, false, [use]);
+  };
+  async function seal(obj, pass, subtle) {
+    subtle = subtle || root.crypto.subtle;
+    const salt = root.crypto.getRandomValues(new Uint8Array(16)), iv = root.crypto.getRandomValues(new Uint8Array(12));
+    const key = await aesKey(pass, salt, 'encrypt', subtle);
+    const ct = new Uint8Array(await subtle.encrypt({ name: 'AES-GCM', iv }, key, new TextEncoder().encode(JSON.stringify(obj))));
+    return JSON.stringify({ v: 1, salt: toB64(salt), iv: toB64(iv), ct: toB64(ct) });
+  }
+  async function decrypt(text, pass, subtle, what) {
     subtle = subtle || (root.crypto && root.crypto.subtle);
     let f;
-    try { f = JSON.parse(text); } catch (e) { throw new Error('This is not a phone bundle.'); }
-    if (!f || f.v !== 1 || !f.salt || !f.iv || !f.ct) throw new Error('This is not a phone bundle (or a newer version).');
-    let bundle;
+    try { f = JSON.parse(text); } catch (e) { throw new Error('This is not a ' + what + '.'); }
+    if (!f || f.v !== 1 || !f.salt || !f.iv || !f.ct) throw new Error('This is not a ' + what + ' (or a newer version).');
     try {
-      const base = await subtle.importKey('raw', new TextEncoder().encode(pass), 'PBKDF2', false, ['deriveKey']);
-      const key = await subtle.deriveKey({ name: 'PBKDF2', salt: fromB64(f.salt), iterations: ITER, hash: 'SHA-256' }, base, { name: 'AES-GCM', length: 256 }, false, ['decrypt']);
-      const buf = await subtle.decrypt({ name: 'AES-GCM', iv: fromB64(f.iv) }, key, fromB64(f.ct));
-      bundle = JSON.parse(new TextDecoder().decode(buf));
+      const key = await aesKey(pass, fromB64(f.salt), 'decrypt', subtle);
+      return JSON.parse(new TextDecoder().decode(await subtle.decrypt({ name: 'AES-GCM', iv: fromB64(f.iv) }, key, fromB64(f.ct))));
     } catch (e) { throw new Error('Wrong passphrase, or the file is damaged.'); }
+  }
+  async function open(text, pass, subtle) {
+    const bundle = await decrypt(text, pass, subtle, 'phone bundle');
     if (!bundle || bundle.version !== 1 || !['customers', 'catalog', 'followUps', 'checks'].every((k) => Array.isArray(bundle[k]))) throw new Error('The bundle is not a version 1 bundle.');
     return bundle;
+  }
+  async function openOutbox(text, pass, subtle) {
+    const o = await decrypt(text, pass, subtle, 'outbox file');
+    if (!o || o.version !== 1 || !Array.isArray(o.records)) throw new Error('The file is not a version 1 outbox.');
+    return o;
   }
 
   /* ---------- pricing ---------- */
@@ -56,6 +73,21 @@
     const extra = titled ? [titled * rules.titleAdd.amount] : [];
     const total = cents(rows.reduce((a, r, i) => a + line(i), 0) + promo.concat(extra).reduce((a, x) => a + x, 0));
     return { units, promo, extra, total };
+  }
+  // Quote lines for the capture screen: same engine as the Price check, but call-for-price items are listed, never priced, never $0.
+  // rows: [{item, qty, title?}] -> {lines:[{name, qty, call, unit, total, title}], promo, extra, total, incomplete}
+  function priceLines(rows, catalog, rules) {
+    const items = rows.map((r) => ({ r, c: find(catalog, r.item) }));
+    const ok = (x) => x.c && !isCall(x.c);
+    const q = items.some(ok) ? priceQuote(items.filter(ok).map((x) => x.r), catalog, rules) : { units: [], promo: [], extra: [], total: 0 };
+    let k = 0;
+    const lines = items.map((x) => {
+      const qty = Number(x.r.qty) || 0, title = x.r.title || null;
+      if (!ok(x)) return { name: x.c ? x.c.name : String(x.r.item), qty, call: true, unit: null, total: null, title };
+      const unit = q.units[k++];
+      return { name: x.c.name, qty, call: false, unit, total: cents(unit * qty), title };
+    });
+    return { lines, promo: q.promo, extra: q.extra, total: q.total, incomplete: lines.some((l) => l.call) };
   }
   const same = (a, b) => Array.isArray(a) && Array.isArray(b) && a.length === b.length && a.every((x, i) => Math.abs(x - b[i]) < 0.005);
   // Returns the failing checks ([] = all pass). Anything malformed counts as failing.
@@ -114,6 +146,8 @@
   }
   const ageClass = (iso, now) => { const d = (now - new Date(iso)) / 864e5; return d > 30 ? 'red' : d > 7 ? 'amber' : ''; };
 
-  const api = { open, find, isCall, tierPrice, tierLabels, priceQuote, selfCheck, searchCustomers, searchCatalog, dueClass, ageClass, dayStr, digits };
+  const stamp = (d) => dayStr(d) + '-' + String(d.getHours()).padStart(2, '0') + String(d.getMinutes()).padStart(2, '0');
+
+  const api = { open, seal, openOutbox, priceLines, stamp, find, isCall, tierPrice, tierLabels, priceQuote, selfCheck, searchCustomers, searchCatalog, dueClass, ageClass, dayStr, digits };
   if (typeof module !== 'undefined' && module.exports) module.exports = api; else root.AAICore = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this);

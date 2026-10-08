@@ -35,3 +35,13 @@ a.act{display:inline-flex;align-items:center;min-height:44px;min-width:44px;padd
 .overdue{border-left:4px solid var(--critical)}.soon{border-left:4px solid var(--warn)}
 .overdue .due{color:var(--critical)}.soon .due{color:var(--warn)}
 .gap{margin:8px 0}
+
+#tabs button{padding:8px 2px;font-size:13px}
+.badge{display:inline-block;margin-left:4px;min-width:20px;padding:0 6px;border-radius:99px;background:var(--critical);color:#0c1116;font-size:12px;line-height:20px}
+button.wide{width:100%;margin:8px 0}
+textarea{width:100%;padding:8px 12px;border:1px solid var(--rule);border-radius:8px;background:var(--surface);font:inherit;font-size:16px}
+h2{font-size:18px;margin:8px 0}
+.err{min-height:1.4em;color:var(--critical)}
+.price{font-family:var(--mono);font-size:14px;margin:6px 0}
+.total{font-weight:600;font-size:18px;margin:8px 0}
+.card button,.card a.act{margin-top:8px}

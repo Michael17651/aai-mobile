@@ -1,6 +1,6 @@
 # AAI Mobile
 
-Offline iPhone app (installable PWA), version 1, read-only: price check, customer lookup and follow-ups, from one encrypted bundle exported by the AAI Console.
+Offline iPhone app (installable PWA): price check, customer lookup and follow-ups from one encrypted bundle exported by the AAI Console (read-only), plus capture of leads, quotes/orders and follow-up notes into an outbox on the phone.
 
 ## Standing rule
 
@@ -32,6 +32,12 @@ The app locks at every cold start and after 5 minutes idle (or the Lock button),
 **Safari storage caveat:** if you use it as a plain Safari tab (not added to the Home Screen), Safari may delete site storage, including the saved bundle, after 7 days without use. The Home Screen app is not subject to that. If the saved bundle is gone, import the file again.
 
 The customer **Maps** button is a plain link to Google Maps (`https://www.google.com/maps/search/?api=1&query=<url-encoded address>`): it opens the Google Maps app if installed, otherwise Google Maps in Safari. It is only opened when tapped; the app itself loads nothing from the network.
+
+## Capture and outbox
+
+The **New** tab captures a lead/new customer (with "met at" and hot/warm/cold), a quote request or order (catalog lines priced with the same engine as Price check; call-for-price items show "Call for price", never $0), or a follow-up note (for a customer or a lead on the phone). Each is saved to the **Outbox** (IndexedDB on the phone, count badge on the tab) and can be edited or deleted until exported. Nothing is sent by the app.
+
+**Outbox, Export** asks for a passphrase twice, encrypts all unexported records into `aai-outbox-YYYY-MM-DD-HHMM.aaio` (same crypto and layout as `.aaib`), and opens the iOS share sheet (or offers a download). Records are marked exported only after the share finishes or you tap "I sent it", and stay listed for 30 days so a lost file can be re-exported. The outbox is customer data: it is stored unencrypted on the phone (iOS device encryption applies; the app's lock hides it from the screen), and `*.aaio` is gitignored and test-checked. The JSON format is in CLAUDE.md.
 
 ## Bundle format (version 1)
 
