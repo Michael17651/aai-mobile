@@ -31,6 +31,8 @@ The app locks at every cold start and after 5 minutes idle (or the Lock button),
 
 **Safari storage caveat:** if you use it as a plain Safari tab (not added to the Home Screen), Safari may delete site storage, including the saved bundle, after 7 days without use. The Home Screen app is not subject to that. If the saved bundle is gone, import the file again.
 
+The customer **Maps** button is a plain link to Google Maps (`https://www.google.com/maps/search/?api=1&query=<url-encoded address>`): it opens the Google Maps app if installed, otherwise Google Maps in Safari. It is only opened when tapped; the app itself loads nothing from the network.
+
 ## Bundle format (version 1)
 
 UTF-8 JSON `{v:1, salt, iv, ct}` (base64). AES-GCM 256, key = PBKDF2-SHA256, 600,000 iterations over the UTF-8 passphrase, `ct` has the 16-byte tag appended. Decrypted: `version, createdAt, priceListDate, customers[], catalog[], followUps[], checks[], rules`. Price rules come from `rules`: title add per board for the listed titles, every Nth Master Panda board free at the average billed price, Master Panda quantities pooled for the tier. Items with no tiers, or a non-positive tier price, show "Call for price", never $0.

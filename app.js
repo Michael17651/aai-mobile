@@ -122,7 +122,7 @@
     put($('tab-customers'), back, h('div', { class: 'card' }, h('h3', {}, c.name), c.contact ? h('div', {}, c.contact) : null,
       (c.phones || []).map((p) => h('div', {}, p, h('br'), link('tel', C.digits(p), 'Call'), link('sms', C.digits(p), 'Text'))),
       c.email ? h('div', {}, c.email, h('br'), link('mailto', c.email, 'Email')) : null,
-      addr ? h('div', {}, addr, h('br'), h('a', { class: 'act', href: 'https://maps.apple.com/?q=' + encodeURIComponent(addr), rel: 'noopener noreferrer' }, 'Maps')) : null,
+      addr ? h('div', {}, addr, h('br'), h('a', { class: 'act', href: 'https://www.google.com/maps/search/?api=1&query=' + encodeURIComponent(addr), rel: 'noopener noreferrer' }, 'Maps')) : null,
       h('p', { class: 'meta' }, 'Last 12 months net: ' + money(c.net12 || 0) + (c.lastOrder ? ' · last order ' + dateText(c.lastOrder) : ''))),
       h('div', { class: 'meta' }, 'Last invoices'),
       (c.invoices || []).map((i) => h('div', { class: 'card' }, h('b', {}, '#' + i.no), ' ' + dateText(i.date) + ' · ' + money(i.total), h('div', { class: 'note' }, (i.items || []).join(', ')))));

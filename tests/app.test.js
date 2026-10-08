@@ -151,8 +151,20 @@ test('customer rows and detail: twins separate, tel/sms/mailto/maps, invoices', 
   box.querySelector('button.row').click();
   const hrefs = [...box.querySelectorAll('a')].map((a) => a.getAttribute('href'));
   ['tel:5551234567', 'sms:5551234567', 'tel:5552220000', 'mailto:ann@acme.test'].forEach((h) => assert.ok(hrefs.includes(h), h));
-  assert.ok(hrefs.some((h) => h.startsWith('https://maps.apple.com/?q=1%20Main%20St')));
+  assert.ok(hrefs.some((h) => h.startsWith('https://www.google.com/maps/search/?api=1&query=1%20Main%20St')));
   assert.match(box.textContent, /\$1,234\.50/); assert.match(box.textContent, /#26090101/); assert.match(box.textContent, /Widget, Gadget/);
+});
+test('Maps link is Google Maps, URL-encodes commas, apostrophes and # units', async () => {
+  const b = fixture(); b.customers[0].address = "5 O'Brien Ave #12"; b.customers[0].name = 'Quote Co';
+  const t = boot(); await tick();
+  await t.chooseFile('b', await seal(b, PASS)); await t.unlock(PASS);
+  const box = t.$('tab-customers'), q = box.querySelector('input');
+  q.value = 'quote'; q.dispatchEvent(new t.w.Event('input'));
+  box.querySelector('button.row').click();
+  const href = [...box.querySelectorAll('a')].map((a) => a.getAttribute('href')).find((h) => h.includes('google.com/maps'));
+  const full = "5 O'Brien Ave #12, " + b.customers[0].city + ', ' + b.customers[0].state + ', ' + b.customers[0].zip;
+  assert.equal(href, 'https://www.google.com/maps/search/?api=1&query=' + encodeURIComponent(full));
+  assert.ok(href.includes('%2C%20') && href.includes("O'Brien") && href.includes('%2312') && !href.includes('#'));
 });
 test('follow-ups sort by due date, highlight overdue and soon, tap to call', async () => {
   const soon = new Date(); soon.setDate(soon.getDate() + 2);
@@ -171,7 +183,7 @@ test('no network code and no external references in the app', () => {
   assert.ok(!/https?:\/\//.test(read('index.html') + read('styles.css') + read('manifest.webmanifest')));
   assert.ok(!/<script[^>]*src="(https?:)?\/\//.test(read('index.html')));
   const urls = read('app.js').match(/https?:\/\/[^'"\s]+/g) || [];
-  assert.deepEqual(urls, ['https://maps.apple.com/?q=']);
+  assert.deepEqual(urls, ['https://www.google.com/maps/search/?api=1&query=']);
   assert.ok(!/localStorage|sessionStorage|console\.(log|info|warn|error|debug)/.test(read('app.js')), 'passphrase/data never logged or kept in web storage');
 });
 test('manifest, icons and service worker are in place', () => {
