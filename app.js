@@ -6,7 +6,7 @@
   const IDLE_MS = 5 * 60 * 1000;
   const APP_VERSION = '2.0.0', KEEP_DAYS = 30;
   let data = null, check = null, pending = null, lastActive = Date.now(), customers = [], selected = null;
-  let ob = [], deviceLabel = 'iPhone', xport = null;
+  let ob = [], deviceLabel = 'iPhone', xport = null, qtys = new Map();
 
   /* ----- storage: the still-encrypted file text, in IndexedDB ----- */
   const idb = () => new Promise((res, rej) => { const r = indexedDB.open('aai-mobile', 2); r.onupgradeneeded = () => { const d = r.result; if (!d.objectStoreNames.contains('kv')) d.createObjectStore('kv'); if (!d.objectStoreNames.contains('outbox')) d.createObjectStore('outbox', { keyPath: 'id' }); }; r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); });
@@ -32,7 +32,7 @@
   /* ----- lock / unlock ----- */
   function touch() { lastActive = Date.now(); }
   function lock() {
-    endExport(); data = null; check = null; customers = []; selected = null; pending = null; ob = [];
+    endExport(); data = null; check = null; customers = []; selected = null; pending = null; ob = []; qtys = new Map();
     $('badge').hidden = true;
     ['tab-prices', 'tab-customers', 'tab-followups', 'tab-new', 'tab-outbox', 'banner'].forEach((id) => $(id).replaceChildren());
     $('pass').value = ''; $('file').value = '';
@@ -69,7 +69,7 @@
   }
 
   function show(b) {
-    data = b; check = C.selfCheck(b); customers = b.customers; touch();
+    data = b; check = C.selfCheck(b); customers = b.customers.slice().sort((a, b) => a.name.localeCompare(b.name)); qtys = new Map(); touch();
     $('lockMsg').textContent = '';
     $('lockView').hidden = true; $('appView').hidden = false; $('lockBtn').hidden = false;
     const age = $('bundleAge'); age.textContent = 'Bundle from ' + dateText(b.createdAt); age.className = C.ageClass(b.createdAt, new Date());
@@ -97,31 +97,66 @@
     const draw = () => {
       const list = C.searchCatalog(data.catalog, q.value, g.value);
       put(out, h('p', { class: 'meta' }, list.length + ' items'), list.map(priceCard));
+      calc();
     };
     q.oninput = g.onchange = draw;
-    put(box, h('p', { class: 'meta' }, data.priceListDate + ' · Bundle from ' + dateText(data.createdAt)), q, h('div', { class: 'gap' }, g), out);
+    put(box, h('div', { class: 'pin' }, h('p', { class: 'meta' }, data.priceListDate + ' · Bundle from ' + dateText(data.createdAt)), q, h('div', { class: 'gap' }, g)), out);
     draw();
+  }
+  // Whole numbers 1..9999 only: digits are kept, 4 at most, and 0 is empty.
+  const cleanQty = (v) => String(v).replace(/\D/g, '').replace(/^0+/, '').slice(0, 4);
+  // Prices every card that has a quantity in one go (Master Panda boards pool), then paints the visible cards.
+  function calc() {
+    const rows = data.catalog.filter((c) => qtys.get(c.name)).map((c) => ({ item: c.name, qty: Number(qtys.get(c.name)) }));
+    const q = C.priceLines(rows, data.catalog, data.rules), by = new Map(q.lines.map((l, i) => [rows[i].item, l]));
+    const pool = rows.reduce((a, r) => a + (C.find(data.catalog, r.item).mp ? r.qty : 0), 0);
+    const credit = q.promo.reduce((a, x) => a + x, 0);
+    document.querySelectorAll('#tab-prices .card[data-name]').forEach((card) => {
+      const c = C.find(data.catalog, card.dataset.name), l = by.get(c.name), out = card.querySelector('.calc');
+      card.querySelectorAll('.tiers .hit').forEach((x) => x.classList.remove('hit'));
+      if (!l) { put(out); return; }
+      if (l.call) { put(out, h('span', { class: 'call' }, 'Call for price')); return; }
+      const n = c.mp ? pool : l.qty, tiers = c.tiers;
+      let hit = 0; tiers.forEach((t, i) => { if (t[0] <= n) hit = i; });
+      const cells = card.querySelectorAll('.tiers span'); if (cells[hit]) { cells[hit].classList.add('hit'); }
+      put(out, l.qty + ' × ' + money(l.unit) + ' = ' + money(l.total) + (c.mp && pool !== l.qty ? ' (tier from ' + pool + ' Master Panda boards)' : '') + (c.mp && credit ? ' · free board credit ' + money(credit) + ' across boards' : ''));
+    });
   }
   function priceCard(c) {
     const call = C.isCall(c), labels = call ? [] : C.tierLabels(c);
-    return h('div', { class: 'card' }, h('h3', {}, c.name),
+    const qi = h('input', { type: 'text', inputmode: 'numeric', pattern: '[0-9]*', maxlength: '4', placeholder: 'Qty', 'aria-label': 'Quantity for ' + c.name, autocomplete: 'off' });
+    qi.value = qtys.get(c.name) || '';
+    qi.oninput = () => { const v = cleanQty(qi.value); qi.value = v; if (v) qtys.set(c.name, v); else qtys.delete(c.name); calc(); };
+    return h('div', { class: 'card', 'data-name': c.name }, h('h3', {}, c.name),
       call ? h('div', { class: 'call' }, 'Call for price') : h('div', { class: 'tiers' }, c.tiers.map((t, i) => [h('span', {}, labels[i]), h('b', {}, money(t[1]))])),
       (c.flags || []).map((f) => h('span', { class: 'flag' }, f)),
-      c.note ? h('div', { class: 'note' }, c.note) : null);
+      c.note ? h('div', { class: 'note' }, c.note) : null,
+      h('div', { class: 'qty' }, qi), h('div', { class: 'calc', role: 'status' }));
   }
 
   /* ----- customers ----- */
   function renderCustomers() {
     const box = $('tab-customers');
+    box.onscroll = null;
     if (selected) return renderDetail(selected);
     const q = h('input', { type: 'search', placeholder: 'Name, contact, city, state, zip, phone, email', 'aria-label': 'Search customers', autocomplete: 'off' });
-    const out = h('div');
-    q.oninput = () => {
-      const r = C.searchCustomers(customers, q.value);
-      put(out, !q.value.trim() ? h('p', { class: 'meta' }, 'Type to search ' + customers.length + ' customers.') : [h('p', { class: 'meta' }, r.length + ' found' + (r.length > 50 ? ', showing 50' : '')),
-        r.slice(0, 50).map((c) => { const b = h('button', { type: 'button', class: 'row' }, c.name, h('small', {}, [c.city, c.state].filter(Boolean).join(', ') + (c.lastOrder ? ' · last order ' + dateText(c.lastOrder) : ''))); b.onclick = () => { selected = c; renderCustomers(); }; return b; })]);
+    const out = h('div'), STEP = 50;
+    let list = [], shown = 0, rows = null, more = null;
+    const row = (c) => { const b = h('button', { type: 'button', class: 'row' }, c.name, h('small', {}, [c.city, c.state].filter(Boolean).join(', ') + (c.lastOrder ? ' · last order ' + dateText(c.lastOrder) : ''))); b.onclick = () => { selected = c; renderCustomers(); }; return b; };
+    // Chunked: 50 rows at a time, more on scroll near the bottom or with the Show more row.
+    const next = () => {
+      rows.append(...list.slice(shown, shown + STEP).map(row)); shown = Math.min(list.length, shown + STEP);
+      more.hidden = shown >= list.length;
     };
-    put(box, q, out); q.oninput();
+    q.oninput = () => {
+      const typed = q.value.trim();
+      list = typed ? C.searchCustomers(customers, q.value) : customers; shown = 0;
+      rows = h('div'); more = btn('Show more', next, 'secondary wide');
+      put(out, h('p', { class: 'meta' }, typed ? list.length + ' found' : customers.length + ' customers'), rows, more);
+      next(); box.scrollTop = 0;
+    };
+    box.onscroll = () => { if (!more.hidden && box.scrollTop + box.clientHeight > box.scrollHeight - 300) next(); };
+    put(box, h('div', { class: 'pin' }, q), out); q.oninput();
   }
   function renderDetail(c) {
     const addr = [c.address, c.city, c.state, c.zip].filter(Boolean).join(', ');

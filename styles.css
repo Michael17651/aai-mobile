@@ -1,21 +1,24 @@
 :root{--paper:#12151a;--surface:#1a1e25;--surface-2:#20252d;--ink:#e7ebf0;--ink-soft:#9aa4b2;--ink-faint:#6f7987;--rule:#2c333d;--accent:#7db2d6;--critical:#e2918a;--critical-soft:#2f1d1c;--warn:#d4a44f;--ok:#7cbf9e;--ok-soft:#1a2a23;
  --mono:ui-monospace,"SF Mono",Menlo,monospace;--sans:-apple-system,BlinkMacSystemFont,"Helvetica Neue",Arial,sans-serif}
 *{box-sizing:border-box}
-html{color-scheme:dark}
-body{margin:0;background:var(--paper);color:var(--ink);font:16px/1.45 var(--sans);-webkit-text-size-adjust:100%;padding:env(safe-area-inset-top) env(safe-area-inset-right) 0 env(safe-area-inset-left)}
+html{color-scheme:dark;height:100dvh;overflow:hidden;overscroll-behavior:none}
+body{margin:0;position:fixed;inset:0;height:100dvh;overflow:hidden;overscroll-behavior:none;display:flex;flex-direction:column;background:var(--paper);color:var(--ink);font:16px/1.45 var(--sans);-webkit-text-size-adjust:100%;padding:0 env(safe-area-inset-right) 0 env(safe-area-inset-left)}
 [hidden]{display:none!important}
-#head{position:sticky;top:0;z-index:5;display:flex;align-items:center;justify-content:space-between;gap:12px;min-height:52px;padding:4px 16px;background:var(--paper);border-bottom:1px solid var(--rule);font-family:var(--mono);font-size:13px}
+#head{flex:none;z-index:5;display:flex;align-items:center;justify-content:space-between;gap:12px;min-height:calc(52px + env(safe-area-inset-top));padding:env(safe-area-inset-top) 16px 4px;background:var(--paper);border-bottom:1px solid var(--rule);font-family:var(--mono);font-size:13px}
 #bundleAge.amber{color:var(--warn)}#bundleAge.red{color:var(--critical)}
 button,input,select{font:inherit;color:inherit}
 button{min-height:44px;min-width:44px;padding:8px 16px;border:1px solid var(--accent);border-radius:8px;background:var(--accent);color:#0c1116;font-weight:600}
 button.secondary,#lockBtn{background:transparent;color:var(--accent)}
 input,select{width:100%;min-height:44px;padding:8px 12px;border:1px solid var(--rule);border-radius:8px;background:var(--surface);font-size:16px}
 label{display:block;margin:12px 0 4px;color:var(--ink-faint);font:12px var(--mono);text-transform:uppercase;letter-spacing:.12em}
-#lockView{padding:24px 16px;max-width:480px;margin:0 auto}
+#lockView{flex:1;min-height:0;width:100%;overflow-y:auto;-webkit-overflow-scrolling:touch;overscroll-behavior:contain;padding:24px 16px;max-width:480px;margin:0 auto}
 #lockView button{width:100%;margin-top:12px}
 #lockMsg{min-height:1.4em;color:var(--critical)}
-#appView{padding:12px 16px calc(72px + env(safe-area-inset-bottom));max-width:720px;margin:0 auto}
-#tabs{position:fixed;left:0;right:0;bottom:0;display:flex;background:var(--surface);border-top:1px solid var(--rule);padding:0 env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left)}
+#appView{flex:1;min-height:0;width:100%;max-width:720px;margin:0 auto;display:flex;flex-direction:column}
+#banner{flex:none;padding:0 16px}
+#appView>section{flex:1;min-height:0;overflow-y:auto;-webkit-overflow-scrolling:touch;overscroll-behavior:contain;padding:12px 16px 16px}
+.pin{position:sticky;top:-12px;z-index:2;margin:-12px -16px 0;padding:12px 16px 4px;background:var(--paper)}
+#tabs{flex:none;display:flex;background:var(--surface);border-top:1px solid var(--rule);padding:0 0 env(safe-area-inset-bottom)}
 #tabs button{flex:1;min-height:52px;border:0;border-radius:0;background:transparent;color:var(--ink-soft)}
 #tabs button.on{color:var(--accent);box-shadow:inset 0 2px 0 var(--accent)}
 .banner{margin:0 0 12px;padding:10px 12px;border:1px solid var(--ok);border-radius:8px;background:var(--ok-soft);color:var(--ok)}
@@ -45,3 +48,7 @@ h2{font-size:18px;margin:8px 0}
 .price{font-family:var(--mono);font-size:14px;margin:6px 0}
 .total{font-weight:600;font-size:18px;margin:8px 0}
 .card button,.card a.act{margin-top:8px}
+
+.qty{display:flex;align-items:center;gap:8px;margin-top:8px}.qty label{margin:0}.qty input{width:96px}
+.tiers .hit,.tiers .hit+b{color:var(--accent);font-weight:700}
+.calc{font-family:var(--mono);font-size:14px;margin-top:6px;min-height:1.4em}

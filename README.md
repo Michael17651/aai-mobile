@@ -33,6 +33,14 @@ The app locks at every cold start and after 5 minutes idle (or the Lock button),
 
 The customer **Maps** button is a plain link to Google Maps (`https://www.google.com/maps/search/?api=1&query=<url-encoded address>`): it opens the Google Maps app if installed, otherwise Google Maps in Safari. It is only opened when tapped; the app itself loads nothing from the network.
 
+## Layout, quantity and customer list
+
+The page itself never scrolls: a fixed `100dvh` column (top bar, banner, one scrolling region, tab bar) with safe-area insets, so the bars stay put under the status bar and home indicator, and the keyboard or rubber-band bounce cannot move them. The price/customer search boxes stay pinned above the scrolling results.
+
+On **Prices**, each card has a Quantity box (whole numbers 1 to 9999). It highlights the tier row and shows unit price and line total from the same engine as quotes (Master Panda boards pool their quantities, with the free-board credit noted); call-for-price items say "Call for price". Quantities are kept while the app is unlocked and cleared on Lock.
+
+**Customers** lists everyone sorted by name when the search is empty ("N customers"), 50 rows at a time (more on scroll or "Show more"); typing filters live.
+
 ## Capture and outbox
 
 The **New** tab captures a lead/new customer (with "met at" and hot/warm/cold), a quote request or order (catalog lines priced with the same engine as Price check; call-for-price items show "Call for price", never $0), or a follow-up note (for a customer or a lead on the phone). Each is saved to the **Outbox** (IndexedDB on the phone, count badge on the tab) and can be edited or deleted until exported. Nothing is sent by the app.

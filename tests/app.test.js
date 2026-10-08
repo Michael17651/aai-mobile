@@ -358,3 +358,48 @@ test('lock empties the capture and outbox screens; idle lock still applies', asy
   assert.equal(t.w.AAIApp.state(), null);
   assert.ok(!/Secret Lead|Typed Draft/.test(t.text())); assert.equal(t.$('tab-outbox').childNodes.length + t.$('tab-new').childNodes.length, 0); assert.equal(t.$('badge').hidden, true);
 });
+
+/* ---------- layout, quantity entry, full customer list ---------- */
+test('layout CSS: fixed 100dvh shell, one scroll region, safe-area insets, cover viewport', () => {
+  const css = read('styles.css'), html = read('index.html');
+  assert.match(css, /body\{[^}]*height:100dvh[^}]*overflow:hidden/);
+  assert.match(css, /html\{[^}]*height:100dvh[^}]*overflow:hidden/);
+  assert.match(css, /#appView>section\{[^}]*overflow-y:auto[^}]*-webkit-overflow-scrolling:touch[^}]*overscroll-behavior:contain/);
+  assert.match(css, /env\(safe-area-inset-top\)/); assert.match(css, /env\(safe-area-inset-bottom\)/);
+  assert.match(css, /#tabs\{(?![^}]*position:fixed)/);
+  assert.match(html, /viewport-fit=cover/); assert.match(html, /black-translucent/);
+});
+test('quantity entry: tier boundaries, highlight, call-for-price, clears on Lock', async () => {
+  const t = await unlocked(), box = t.$('tab-prices');
+  const card = (n) => [...box.querySelectorAll('.card')].find((c) => c.dataset.name === n);
+  const qty = card('Panda A').querySelector('input[inputmode="numeric"]');
+  assert.equal(qty.getAttribute('pattern'), '[0-9]*');
+  for (const [n, unit, tier] of [[1, 100, '1–9'], [9, 100, '1–9'], [10, 90, '10–29'], [29, 90, '10–29'], [30, 80, '30+'], [99, 80, '30+'], [100, 80, '30+']]) {
+    type(t.w, qty, String(n));
+    const c = card('Panda A');
+    assert.equal(c.querySelector('.hit').textContent, tier, 'tier at ' + n);
+    assert.ok(c.querySelector('.calc').textContent.includes(n + ' × $' + unit + ' = $' + (n * unit).toLocaleString('en-US')), 'line at ' + n);
+  }
+  type(t.w, qty, '99999'); assert.equal(qty.value, '9999');
+  type(t.w, qty, 'a0b'); assert.equal(qty.value, ''); assert.equal(card('Panda A').querySelector('.calc').textContent, '');
+  const call = card('Printer X').querySelector('input'); type(t.w, call, '5');
+  assert.match(card('Printer X').querySelector('.calc').textContent, /Call for price/); assert.ok(!hasMoneyZero(card('Printer X').textContent));
+  type(t.w, qty, '6'); type(t.w, card('Panda B').querySelector('input'), '4'); // pooled 10 -> $90 tier on both
+  assert.match(card('Panda A').querySelector('.calc').textContent, /6 × \$90 = \$540.*free board credit/);
+  type(t.w, box.querySelector('input[type=search]'), 'panda a'); // survives re-filter
+  assert.equal(card('Panda A').querySelector('input').value, '6');
+  t.$('lockBtn').click();
+  assert.equal(t.$('tab-prices').childNodes.length, 0);
+});
+test('customers: full sorted list when the search is empty, chunked, filter still works', async () => {
+  const b = fixture(); b.customers = [];
+  for (let i = 0; i < 120; i++) b.customers.push({ key: 'k' + i, name: 'Cust ' + String(119 - i).padStart(3, '0'), contact: '', address: '', city: 'X', state: 'IL', zip: '60000', phones: [], email: '', lastOrder: null, net12: 0, invoices: [] });
+  const t = await unlocked(b), box = t.$('tab-customers');
+  assert.match(box.textContent, /120 customers/);
+  let rows = box.querySelectorAll('button.row'); assert.equal(rows.length, 50);
+  assert.match(rows[0].textContent, /Cust 000/); assert.match(rows[49].textContent, /Cust 049/);
+  [...box.querySelectorAll('button')].find((x) => x.textContent === 'Show more').click();
+  assert.equal(box.querySelectorAll('button.row').length, 100);
+  type(t.w, box.querySelector('input'), 'cust 11'); assert.match(box.textContent, /11 found/);
+  type(t.w, box.querySelector('input'), ''); assert.match(box.textContent, /120 customers/);
+});
