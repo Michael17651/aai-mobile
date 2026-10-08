@@ -100,7 +100,7 @@
       calc();
     };
     q.oninput = g.onchange = draw;
-    put(box, h('div', { class: 'pin' }, h('p', { class: 'meta' }, data.priceListDate + ' · Bundle from ' + dateText(data.createdAt)), q, h('div', { class: 'gap' }, g)), out);
+    put(box, h('div', { class: 'pin' }, taNote(), h('p', { class: 'meta' }, data.priceListDate + ' · Bundle from ' + dateText(data.createdAt)), q, h('div', { class: 'gap' }, g)), out);
     draw();
   }
   // Whole numbers 1..9999 only: digits are kept, 4 at most, and 0 is empty.
@@ -263,12 +263,15 @@
       }, !!rec.id));
   }
 
+  const taNote = () => data.catalog.some((c) => c.ta !== undefined) ? null : h('p', { class: 'meta' }, 'Re-export the phone bundle to enable title add');
+
   function quoteForm(rec) {
     rec = rec || {};
     if (!check.ok) return h('p', { class: 'meta' }, 'Quotes are closed until the bundle passes its price check. Re-export it from the console.');
     const rules = data.rules, titles = rules.titleAdd.titles;
     let cust = rec.customer && rec.customer.existing ? rec.customer : null;
-    const rows = (rec.lines || []).map((l) => ({ item: l.name, qty: l.qty, title: l.title || '' }));
+    const canTitle = (name) => { const c = C.find(data.catalog, name); return !!c && c.ta === true; };
+    const rows = (rec.lines || []).map((l) => ({ item: l.name, qty: l.qty, title: canTitle(l.name) ? l.title || '' : '' }));
     const kind = sel([['quote', 'Quote request'], ['order', 'Order']], rec.kind, 'Order or quote request');
     const mode = sel([['existing', 'Existing customer'], ['new', 'New customer']], rec.customer && !rec.customer.existing ? 'new' : 'existing', 'Customer');
     const np = personFields(rec.customer && !rec.customer.existing ? rec.customer : {});
@@ -301,7 +304,7 @@
       put(lineBox, rows.map((r, i) => {
         const qty = inp(r.qty, { type: 'number', inputmode: 'numeric', min: '1', step: '1', 'aria-label': 'Quantity ' + r.item });
         qty.oninput = () => { r.qty = qty.value; reprice(); };
-        const ttl = titles.length ? field('Title (adds a charge for listed titles)', sel([['', 'None']].concat(titles.map((t) => [t, t])), r.title, 'Title')) : null;
+        const ttl = titles.length && canTitle(r.item) ? field('Title (adds a charge for listed titles)', sel([['', 'None']].concat(titles.map((t) => [t, t])), r.title, 'Title')) : null;
         if (ttl) ttl.querySelector('select').onchange = (e) => { r.title = e.target.value; reprice(); };
         const span = h('div', { class: 'price' }); spans.push(span);
         return h('div', { class: 'card' }, h('h3', {}, r.item), field('Qty', qty), ttl, span, btn('Remove', () => { rows.splice(i, 1); drawLines(); }, 'secondary'));
@@ -320,7 +323,7 @@
     drawCust(); drawLines();
 
     return h('div', {}, h('h2', {}, 'Quote request or order'), field('Type', kind), field('Customer', mode), custBox,
-      h('div', { class: 'meta' }, 'Lines · ' + data.priceListDate), lineBox, sumBox, field('Add a line', cq), cout, field('Notes', notes),
+      taNote(), h('div', { class: 'meta' }, 'Lines · ' + data.priceListDate), lineBox, sumBox, field('Add a line', cq), cout, field('Notes', notes),
       foot(msg, () => {
         const c = mode.value === 'new' ? Object.assign({ existing: false }, np.read()) : cust;
         if (!c || (!c.existing && !c.company)) return "Pick a customer, or enter the new customer's company.";
@@ -401,6 +404,8 @@
   const idleCheck = () => { if (data && Date.now() - lastActive >= IDLE_MS) lock(); };
   setInterval(idleCheck, 15000);
   document.addEventListener('visibilitychange', idleCheck);
+  // iOS can leave the page scrolled after the keyboard or a select closes; put the shell back.
+  addEventListener('focusout', () => setTimeout(() => scrollTo(0, 0), 50));
   window.AAIApp = { lock, idleCheck, state: () => data, IDLE_MS, APP_VERSION };
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
   lock();

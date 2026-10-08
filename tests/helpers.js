@@ -30,7 +30,7 @@ function fixture(over) {
     catalog: [
       { name: 'Panda A', tiers, note: 'Master Panda test', flags: ['Limited stock'], group: 'Boards', aliases: ['Pnd A'], mp: true },
       { name: 'Panda B', tiers, note: '', flags: [], group: 'Boards', aliases: [], mp: true },
-      { name: 'Ocean Test', tiers: [[1, 1000]], note: 'fish board', flags: [], group: 'Fish', aliases: ['OT'], mp: false },
+      { name: 'Ocean Test', tiers: [[1, 1000]], note: 'fish board', flags: [], group: 'Fish', aliases: ['OT'], mp: false, ta: true },
       { name: 'Printer X', tiers: [], note: 'ask sales', flags: ['Must call'], group: 'Parts', aliases: [], mp: false },
       { name: 'Zero Bug', tiers: [[1, 0]], note: '', flags: ['Price TBD'], group: 'Parts', aliases: [], mp: false }
     ],

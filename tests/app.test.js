@@ -360,10 +360,12 @@ test('lock empties the capture and outbox screens; idle lock still applies', asy
 });
 
 /* ---------- layout, quantity entry, full customer list ---------- */
-test('layout CSS: fixed 100dvh shell, one scroll region, safe-area insets, cover viewport', () => {
+test('layout CSS: fixed full-viewport shell, one scroll region, safe-area insets, cover viewport', () => {
   const css = read('styles.css'), html = read('index.html');
-  assert.match(css, /body\{[^}]*height:100dvh[^}]*overflow:hidden/);
-  assert.match(css, /html\{[^}]*height:100dvh[^}]*overflow:hidden/);
+  assert.match(css, /body\{[^}]*position:fixed;inset:0;(?![^}]*height)[^}]*overflow:hidden/);
+  assert.match(css, /html\{[^}]*height:100%[^}]*overflow:hidden[^}]*background:var\(--paper\)/);
+  assert.match(css, /#tabs\{[^}]*background:var\(--surface\)[^}]*padding:0 0 env\(safe-area-inset-bottom\)/);
+  assert.ok(!/body\{[^}]*padding[^}]*safe-area-inset-bottom/.test(css));
   assert.match(css, /#appView>section\{[^}]*overflow-y:auto[^}]*-webkit-overflow-scrolling:touch[^}]*overscroll-behavior:contain/);
   assert.match(css, /env\(safe-area-inset-top\)/); assert.match(css, /env\(safe-area-inset-bottom\)/);
   assert.match(css, /#tabs\{(?![^}]*position:fixed)/);
@@ -402,4 +404,26 @@ test('customers: full sorted list when the search is empty, chunked, filter stil
   assert.equal(box.querySelectorAll('button.row').length, 100);
   type(t.w, box.querySelector('input'), 'cust 11'); assert.match(box.textContent, /11 found/);
   type(t.w, box.querySelector('input'), ''); assert.match(box.textContent, /120 customers/);
+});
+
+/* ---------- title add only where the bundle says ta === true ---------- */
+const titleSelects = (t) => [...t.$('tab-new').querySelectorAll('select')].filter((s) => s.getAttribute('aria-label') === 'Title');
+const withTa = (ta) => { const b = fixture(); b.catalog.forEach((c) => { if (c.name === 'Ocean Test') { if (ta === undefined) delete c.ta; else c.ta = ta; } }); return b; };
+test('title picker: ta true shows it, false or missing hides it', async () => {
+  for (const [ta, shown] of [[true, 1], [false, 0], [undefined, 0]]) {
+    const t = await unlocked(withTa(ta)); await quote(t, [['Ocean Test', 1], ['Panda A', 1]]);
+    assert.equal(titleSelects(t).length, shown, 'ta=' + ta);
+  }
+});
+test('no title means no $200 add, even on a ta item', async () => {
+  const t = await unlocked(withTa(true)); const f = await quote(t, [['Ocean Test', 3]]);
+  assert.ok(!/Title add/.test(f.textContent)); assert.match(f.textContent, /Total: \$3,000/);
+  const [s] = titleSelects(t); s.value = 'Golden Test'; s.dispatchEvent(new t.w.Event('change', { bubbles: true }));
+  assert.match(t.$('tab-new').textContent, /Title add \+\$600/);
+});
+test('re-export note shows only when the bundle has no ta data', async () => {
+  const NOTE = /Re-export the phone bundle to enable title add/;
+  const old = await unlocked(withTa(undefined)); assert.match(old.$('tab-prices').textContent, NOTE);
+  click(old.$('tab-new'), 'Quote request or order'); assert.match(old.$('tab-new').textContent, NOTE);
+  const cur = await unlocked(withTa(false)); assert.ok(!NOTE.test(cur.$('tab-prices').textContent));
 });

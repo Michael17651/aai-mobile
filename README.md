@@ -49,7 +49,9 @@ The **New** tab captures a lead/new customer (with "met at" and hot/warm/cold), 
 
 ## Bundle format (version 1)
 
-UTF-8 JSON `{v:1, salt, iv, ct}` (base64). AES-GCM 256, key = PBKDF2-SHA256, 600,000 iterations over the UTF-8 passphrase, `ct` has the 16-byte tag appended. Decrypted: `version, createdAt, priceListDate, customers[], catalog[], followUps[], checks[], rules`. Price rules come from `rules`: title add per board for the listed titles, every Nth Master Panda board free at the average billed price, Master Panda quantities pooled for the tier. Items with no tiers, or a non-positive tier price, show "Call for price", never $0.
+UTF-8 JSON `{v:1, salt, iv, ct}` (base64). AES-GCM 256, key = PBKDF2-SHA256, 600,000 iterations over the UTF-8 passphrase, `ct` has the 16-byte tag appended. Decrypted: `version, createdAt, priceListDate, customers[], catalog[], followUps[], checks[], rules`. Price rules come from `rules`: title add per board for the listed titles, every Nth Master Panda board free at the average billed price, Master Panda quantities pooled for the tier. Items with no tiers, or a non-positive tier price, show "Call for price", never $0. Each catalog item carries `ta` (boolean) from the console export: the Title picker on New quote lines shows only for `ta === true`. A bundle with no `ta` on any item hides the picker everywhere and the Price check and New screens say "Re-export the phone bundle to enable title add".
+
+Layout: the shell is `position:fixed; inset:0` (no `100dvh`, which left a gap under the tab bar on iOS); html, body and the tab bar share the dark background and the bar carries its own `padding-bottom: env(safe-area-inset-bottom)`.
 
 ## Files
 
