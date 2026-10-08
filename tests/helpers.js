@@ -17,6 +17,19 @@ async function seal(bundle, pass) {
   return JSON.stringify({ v: 1, salt: b64(salt), iv: b64(iv), ct: b64(ct) });
 }
 
+// Obviously fake values, generated per test run; nothing secret is written in the repo.
+const rndPin = () => String(webcrypto.getRandomValues(new Uint32Array(1))[0] % 9000 + 1000);
+const otherPin = (p) => String((Number(p) + 1) % 10000).padStart(4, '0');
+const PIN = rndPin();
+
+// Independent decrypt of the documented .aaib/.aaio layout (the console's path), not the app's code.
+async function unseal(text, pass) {
+  const f = JSON.parse(text), s = webcrypto.subtle, d = (x) => new Uint8Array(Buffer.from(x, 'base64'));
+  const base = await s.importKey('raw', new TextEncoder().encode(pass), 'PBKDF2', false, ['deriveKey']);
+  const key = await s.deriveKey({ name: 'PBKDF2', salt: d(f.salt), iterations: 600000, hash: 'SHA-256' }, base, { name: 'AES-GCM', length: 256 }, false, ['decrypt']);
+  return JSON.parse(new TextDecoder().decode(await s.decrypt({ name: 'AES-GCM', iv: d(f.iv) }, key, d(f.ct))));
+}
+
 const tiers = [[1, 100], [10, 90], [30, 80]];
 function fixture(over) {
   const b = {
@@ -51,13 +64,14 @@ function fixture(over) {
 }
 
 // A fresh page with the real index.html + core.js + app.js, fake IndexedDB, real WebCrypto.
-function boot(idb) {
+function boot(idb, pre) {
   const html = read('index.html').replace(/<script[^>]*><\/script>/g, '');
   const dom = new JSDOM(html, { runScripts: 'outside-only', url: 'https://aai.test/aai-mobile/', pretendToBeVisual: true });
   const w = dom.window;
   Object.defineProperty(w, 'crypto', { value: webcrypto });
   w.TextEncoder = TextEncoder; w.TextDecoder = TextDecoder;
   w.indexedDB = idb || new IDBFactory();
+  if (pre) pre(w);
   w.eval(read('core.js')); w.eval(read('app.js'));
   const $ = (id) => w.document.getElementById(id);
   return {
@@ -67,12 +81,19 @@ function boot(idb) {
       $('file').dispatchEvent(new w.Event('change'));
       await tick();
     },
+    // Waits for the lock screen's work (PBKDF2 etc.) to finish.
+    async settle() { for (let i = 0; i < 200 && (['pinBtn', 'passBtn', 'newPinBtn'].some((id) => $(id).disabled) || /Opening|Saving/.test($('lockMsg').textContent) || i < 2); i++) await tick(30); },
+    async pin(v) { $('pin').value = v; $('pinForm').dispatchEvent(new w.Event('submit', { cancelable: true })); await this.settle(); },
+    async passphrase(v) { $('pass').value = v; $('passForm').dispatchEvent(new w.Event('submit', { cancelable: true })); await this.settle(); },
+    async setPin(a, b) { $('pin1').value = a; $('pin2').value = b === undefined ? a : b; $('newPinForm').dispatchEvent(new w.Event('submit', { cancelable: true })); await this.settle(); },
+    // Whatever the lock screen asks for: the PIN, or the passphrase then a new PIN (PIN is the shared fake).
     async unlock(pass) {
-      $('pass').value = pass;
-      $('unlockForm').dispatchEvent(new w.Event('submit', { cancelable: true }));
-      for (let i = 0; i < 100 && ($('unlockBtn').disabled || $('lockMsg').textContent === 'Opening…' || i < 2); i++) await tick(30);
+      await tick(60); // lock screen refresh reads IndexedDB
+      if (!$('pinForm').hidden) return this.pin(PIN);
+      await this.passphrase(pass);
+      if (!$('newPinForm').hidden) await this.setPin(PIN);
     }
   };
 }
 const tick = (ms) => new Promise((r) => setTimeout(r, ms || 20));
-module.exports = { seal, fixture, boot, read, ROOT, tick };
+module.exports = { seal, unseal, fixture, boot, read, ROOT, tick, PIN, rndPin, otherPin };

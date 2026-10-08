@@ -56,7 +56,11 @@ note: string, due: "YYYY-MM-DD"
 
 ### Phone behavior
 
-Records are editable/deletable until exported. Export asks for the passphrase twice (8+ chars), builds the file, then shares it (iOS share sheet) or offers a download. Records are marked exported only after the share completes or the user taps "I sent it", and then stay visible for 30 days for re-export. Lock and the 5-minute idle lock empty all screens, including New and Outbox.
+Records are editable/deletable until exported. Export uses the one-time Outbox passphrase (8+ chars, typed twice in Settings or on first export, stored wrapped under the PIN-derived data key), builds the file, then shares it (iOS share sheet) or offers a download. Records are marked exported only after the share completes or the user taps "I sent it", and then stay visible for 30 days for re-export. Lock and the 5-minute idle lock empty all screens, including New, Outbox and Settings.
+
+### Lock model (version 2.1.0)
+
+Import takes the bundle passphrase once, then a 4-8 digit PIN. Stored: bundle sealed with a random AES-GCM data key; the key wrapped by PBKDF2-SHA256 (600,000 iterations) over the PIN; wrong-PIN counter. Neither PIN nor bundle passphrase is stored. 5 wrong PINs wipe the bundle keys (not the outbox). Never put a PIN, passphrase or key in code, tests, fixtures or docs; tests generate fake ones.
 
 ## Usage-based auto-handoff
 

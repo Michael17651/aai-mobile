@@ -1,7 +1,8 @@
 'use strict';
 const test = require('node:test'), assert = require('node:assert/strict');
 const fs = require('fs'), path = require('path');
-const { seal, fixture, boot, read, ROOT, tick } = require('./helpers');
+const { seal, unseal, fixture, boot, read, ROOT, tick, PIN, rndPin, otherPin } = require('./helpers');
+const { execFileSync } = require('child_process'), vm = require('vm');
 const core = require('../core.js');
 const { webcrypto } = require('node:crypto');
 const PASS = 'synthetic-pass-1';
@@ -82,22 +83,121 @@ test('a failed bundle shows the red block and does not open the price screens', 
 });
 
 /* ---------- import, storage, lock ---------- */
-test('import stores the still-encrypted file; unlock after a cold start needs the passphrase', async () => {
+const rawKv = (w) => new Promise((res) => { const r = w.indexedDB.open('aai-mobile'); r.onsuccess = () => { const tx = r.result.transaction('kv'), st = tx.objectStore('kv'), k = st.getAllKeys(), v = st.getAll(); tx.oncomplete = () => res(Object.fromEntries(k.result.map((x, i) => [x, v.result[i]]))); }; });
+const rawPut = (w, key, val) => new Promise((res) => { const r = w.indexedDB.open('aai-mobile'); r.onsuccess = () => { const tx = r.result.transaction('kv', 'readwrite'); tx.objectStore('kv').put(val, key); tx.oncomplete = res; }; });
+const setT = (t, ms) => { const base = t.w.Date.now(); t.w.Date.now = () => base + ms; return base; };
+
+test('first import: passphrase, self-check, choose a PIN twice, vault stored with nothing secret in the clear', async () => {
   const t = boot(); await tick();
-  await t.chooseFile('b.aaib', sealed); await t.unlock('wrong-wrong-wrong');
-  assert.match(t.$('lockMsg').textContent, /Wrong passphrase/);
-  assert.equal(t.w.AAIApp.state(), null);
-  await t.unlock(PASS);
-  assert.ok(t.w.AAIApp.state());
-  const stored = await new Promise((res) => { const r = t.w.indexedDB.open('aai-mobile'); r.onsuccess = () => { const g = r.result.transaction('kv').objectStore('kv').get('bundle'); g.onsuccess = () => res(g.result); }; });
-  assert.equal(stored, sealed);
-  assert.ok(!stored.includes('Acme'));
-  // cold start in the same storage: locked, nothing decrypted, unlock works
+  assert.match(t.$('ver').textContent, /Version 2\.1\.0 · cache aai-mobile-v6/);
+  await t.chooseFile('b.aaib', sealed);
+  assert.ok(!t.$('passForm').hidden); await t.passphrase('wrong-wrong-wrong');
+  assert.match(t.$('lockMsg').textContent, /Wrong passphrase/); assert.equal(t.w.AAIApp.state(), null);
+  await t.passphrase(PASS);
+  assert.ok(!t.$('newPinForm').hidden); assert.equal(t.w.AAIApp.state(), null, 'not open until a PIN is chosen');
+  assert.deepEqual(Object.keys(await rawKv(t.w)), [], 'nothing stored before the PIN');
+  for (const [a, b, re] of [['123', '123', /4 to 8 digits/], ['123456789', '123456789', /4 to 8 digits/], ['12ab', '12ab', /4 to 8 digits/], [PIN, otherPin(PIN), /differ/]]) {
+    await t.setPin(a, b); assert.match(t.$('lockMsg').textContent, re); assert.equal(t.w.AAIApp.state(), null);
+  }
+  await t.setPin(PIN);
+  assert.ok(t.w.AAIApp.state()); assert.match(t.text(), /Prices verified, 4 checks/);
+  const kv = await rawKv(t.w), all = JSON.stringify(kv);
+  assert.deepEqual(Object.keys(kv).sort(), ['fails', 'vault', 'wrap']);
+  assert.ok(!all.includes('Acme') && !all.includes(PASS) && !all.includes(PIN), 'no plaintext, passphrase or PIN stored');
+  assert.deepEqual(Object.keys(kv.wrap).sort(), ['ct', 'iv', 'salt', 'v']);
+  // the wrap is PBKDF2-SHA256, 600,000 iterations, 16-byte salt over the PIN, AES-GCM around a 32-byte key
+  const sub = webcrypto.subtle, d = (x) => new Uint8Array(Buffer.from(x, 'base64')), base = await sub.importKey('raw', new TextEncoder().encode(PIN), 'PBKDF2', false, ['deriveKey']);
+  const k = await sub.deriveKey({ name: 'PBKDF2', salt: d(kv.wrap.salt), iterations: 600000, hash: 'SHA-256' }, base, { name: 'AES-GCM', length: 256 }, false, ['decrypt']);
+  const raw = await sub.decrypt({ name: 'AES-GCM', iv: d(kv.wrap.iv) }, k, d(kv.wrap.ct));
+  assert.equal(d(kv.wrap.salt).length, 16); assert.equal(raw.byteLength, 32);
+  const dkey = await sub.importKey('raw', raw, 'AES-GCM', false, ['decrypt']);
+  const plain = JSON.parse(new TextDecoder().decode(await sub.decrypt({ name: 'AES-GCM', iv: d(kv.vault.iv) }, dkey, d(kv.vault.ct))));
+  assert.equal(plain.customers.length, 3);
+});
+test('PIN unlock after a cold start; wrong PIN is refused; a failed price check still closes the price screens', async () => {
+  const t = boot(); await tick();
+  await t.chooseFile('b.aaib', sealed); await t.unlock(PASS);
   const w2 = boot(t.w.indexedDB); await tick(50);
-  assert.equal(w2.w.AAIApp.state(), null);
-  assert.ok(!w2.$('lockView').hidden);
-  await w2.unlock(PASS);
-  assert.ok(w2.w.AAIApp.state());
+  assert.equal(w2.w.AAIApp.state(), null); assert.ok(!w2.$('lockView').hidden); assert.ok(!w2.$('pinForm').hidden); assert.ok(w2.$('passForm').hidden);
+  assert.match(w2.$('ver').textContent, /aai-mobile-v6/);
+  await w2.pin(otherPin(PIN)); assert.match(w2.$('lockMsg').textContent, /Wrong PIN/); assert.equal(w2.w.AAIApp.state(), null);
+  setT(w2, 20000); await w2.pin(PIN);
+  assert.ok(w2.w.AAIApp.state()); assert.match(w2.text(), /Prices verified/);
+  const b = fixture(); b.checks[0].expect.unit = 1;
+  const t3 = boot(); await tick(); await t3.chooseFile('b', await seal(b, PASS)); await t3.unlock(PASS);
+  const w4 = boot(t3.w.indexedDB); await tick(50); await w4.pin(PIN);
+  assert.match(w4.text(), /Price check failed/); assert.ok(!w4.$('tab-prices').textContent.includes('$100'));
+});
+test('wrong PINs: waits of 1, 2, 4, 8 s; lockout refuses even the right PIN; counter resets on success', async () => {
+  const t = boot(); await tick(); await t.chooseFile('b', sealed); await t.unlock(PASS);
+  const c = boot(t.w.indexedDB); await tick(50);
+  let now = c.w.Date.now(); const clock = () => { c.w.Date.now = () => now; }; clock();
+  const fails = async () => (await rawKv(c.w)).fails;
+  for (const [n, wait] of [[1, 1], [2, 2], [3, 4], [4, 8]]) {
+    await c.pin(otherPin(PIN));
+    const f = await fails(); assert.equal(f.n, n); assert.equal(f.until - now, wait * 1000, 'wait after try ' + n);
+    assert.match(c.$('lockMsg').textContent, new RegExp('Try again in ' + wait + ' s'));
+    await c.pin(PIN); assert.match(c.$('lockMsg').textContent, /Wait \d+ s/, 'right PIN refused during the wait');
+    assert.equal((await fails()).n, n, 'a refused try is not counted'); assert.equal(c.w.AAIApp.state(), null);
+    now += wait * 1000; clock();
+  }
+  await c.pin(PIN); assert.ok(c.w.AAIApp.state());
+  assert.deepEqual(await fails(), { n: 0, until: 0 });
+});
+test('5th wrong PIN in a row wipes the bundle but keeps the outbox', async () => {
+  const t = await unlocked(); await lead(t, 'Kept Lead Co');
+  await new Promise((res) => { const r = t.w.indexedDB.open('aai-mobile'); r.onsuccess = () => { const tx = r.result.transaction('kv', 'readwrite'); tx.objectStore('kv').put('PX', 'deviceLabel'); tx.oncomplete = res; }; });
+  const c = boot(t.w.indexedDB); await tick(50);
+  let now = c.w.Date.now();
+  for (let i = 0; i < 5; i++) { c.w.Date.now = () => now; await c.pin(otherPin(PIN)); now += 10000; }
+  assert.equal(c.w.AAIApp.state(), null);
+  assert.match(c.$('lockMsg').textContent, /^Too many wrong PINs\. Import the phone bundle again with its passphrase\.$/);
+  assert.deepEqual(Object.keys(await rawKv(c.w)), ['deviceLabel']);
+  const recs = await dump(c.w); assert.equal(recs.length, 1); assert.equal(recs[0].company, 'Kept Lead Co');
+  assert.ok(c.$('pinForm').hidden && c.$('passForm').hidden); assert.match(c.$('lockHint').textContent, /No bundle yet/);
+  // a fresh import works and the surviving outbox record is there
+  await c.chooseFile('b', sealed); await c.unlock(PASS); await tick(80);
+  assert.match(c.$('tab-outbox').textContent, /Kept Lead Co/);
+});
+test('Settings: change PIN needs the current PIN; new PIN works, old does not; bundle and outbox passphrase survive', async () => {
+  const t = await unlocked(); const S = t.$('tab-settings'), NEW = otherPin(otherPin(PIN));
+  await setObpass(t, OPASS);
+  t.$('setBtn').click(); await tick(60);
+  assert.match(S.textContent, /Version 2\.1\.0 · cache aai-mobile-v6/);
+  const fill = (lab, v) => type(t.w, S.querySelector('[aria-label="' + lab + '"]'), v);
+  const go = async () => { click(S, 'Change PIN'); await tick(300); };
+  fill('Current PIN', otherPin(PIN)); fill('New PIN', NEW); fill('New PIN again', NEW); await go();
+  assert.match(S.textContent, /Wrong PIN/);
+  fill('Current PIN', PIN); fill('New PIN', NEW); fill('New PIN again', NEW + '1'); await go(); assert.match(S.textContent, /differ/);
+  fill('Current PIN', PIN); fill('New PIN', '12'); fill('New PIN again', '12'); await go(); assert.match(S.textContent, /4 to 8 digits/);
+  setT(t, 20000);
+  fill('Current PIN', PIN); fill('New PIN', NEW); fill('New PIN again', NEW); await go(); assert.match(S.textContent, /PIN changed/);
+  const c = boot(t.w.indexedDB); await tick(50);
+  setT(c, 40000); await c.pin(PIN); assert.equal(c.w.AAIApp.state(), null, 'old PIN refused');
+  setT(c, 80000); await c.pin(NEW); assert.ok(c.w.AAIApp.state());
+  assert.equal(await shownPass(c, NEW), OPASS);
+});
+test('Settings: Delete bundle asks first, removes the bundle, keeps the outbox', async () => {
+  const t = await unlocked(); await lead(t, 'Kept Lead Co');
+  t.$('setBtn').click(); await tick(60);
+  click(t.$('tab-settings'), 'Delete bundle'); assert.ok(t.w.AAIApp.state(), 'still there until confirmed'); assert.match(t.$('tab-settings').textContent, /Unsent outbox records stay/);
+  click(t.$('tab-settings'), 'Cancel'); assert.ok(t.w.AAIApp.state());
+  click(t.$('tab-settings'), 'Delete bundle'); click(t.$('tab-settings'), 'Yes, delete'); await tick(100);
+  assert.equal(t.w.AAIApp.state(), null); assert.deepEqual(Object.keys(await rawKv(t.w)).filter((k) => k !== 'deviceLabel'), []);
+  assert.equal((await dump(t.w)).length, 1); assert.match(t.$('lockMsg').textContent, /Bundle deleted/);
+});
+test('migration: a phone with an old-format bundle asks the passphrase once, then walks through choosing a PIN', async () => {
+  const t = boot(); await tick(); await rawPut(t.w, 'bundle', sealed);
+  const m = boot(t.w.indexedDB); await tick(50);
+  assert.ok(!m.$('passForm').hidden); assert.ok(m.$('pinForm').hidden); assert.match(m.$('lockHint').textContent, /older version/);
+  await m.passphrase('wrong-wrong-wrong'); assert.match(m.$('lockMsg').textContent, /Wrong passphrase/);
+  await m.passphrase(PASS); assert.ok(!m.$('newPinForm').hidden); assert.equal(m.w.AAIApp.state(), null);
+  assert.ok((await rawKv(m.w)).bundle, 'old copy kept until the PIN is saved');
+  await m.setPin(PIN);
+  assert.ok(m.w.AAIApp.state()); const kv = await rawKv(m.w);
+  assert.deepEqual(Object.keys(kv).sort(), ['fails', 'vault', 'wrap']);
+  const n = boot(m.w.indexedDB); await tick(50); assert.ok(!n.$('pinForm').hidden); assert.ok(n.$('passForm').hidden);
+  await n.pin(PIN); assert.ok(n.w.AAIApp.state());
 });
 test('lock wipes memory and the screen; passphrase is not kept anywhere', async () => {
   const t = boot(); await tick();
@@ -106,8 +206,8 @@ test('lock wipes memory and the screen; passphrase is not kept anywhere', async 
   t.$('lockBtn').click();
   assert.equal(t.w.AAIApp.state(), null);
   assert.ok(!/Acme|Panda|Overdue Co/.test(t.text()));
-  assert.equal(t.$('pass').value, '');
-  assert.ok(!t.w.location.href.includes(PASS));
+  assert.equal(t.$('pass').value + t.$('pin').value, '');
+  assert.ok(!t.w.location.href.includes(PASS) && !t.w.location.href.includes(PIN));
   assert.equal(t.w.localStorage.length + t.w.sessionStorage.length, 0);
 });
 test('idle for 5 minutes locks the app', async () => {
@@ -118,6 +218,7 @@ test('idle for 5 minutes locks the app', async () => {
   assert.ok(t.w.AAIApp.state(), 'still unlocked at 4 min');
   t.w.Date.now = () => start + 5 * 60 * 1000 + 1000; t.w.AAIApp.idleCheck();
   assert.equal(t.w.AAIApp.state(), null);
+  await tick(50); assert.ok(!t.$('lockView').hidden); assert.ok(!t.$('pinForm').hidden, 'back at the PIN screen'); assert.ok(t.$('passForm').hidden);
 });
 test('header shows bundle age: neutral, amber after 7 days, red after 30', async () => {
   const day = 864e5, age = async (d) => { const t = boot(); await tick(); await t.chooseFile('b', await seal(fixture({ createdAt: new Date(Date.now() - d * day).toISOString() }), PASS)); await t.unlock(PASS); return t.$('bundleAge'); };
@@ -191,6 +292,7 @@ test('manifest, icons and service worker are in place', () => {
   assert.equal(m.display, 'standalone');
   m.icons.forEach((i) => assert.ok(fs.existsSync(path.join(ROOT, i.src)), i.src));
   assert.ok(read('sw.js').includes('addAll'));
+  assert.equal(/CACHE = '([^']+)'/.exec(read('sw.js'))[1], /CACHE_NAME = '([^']+)'/.exec(read('app.js'))[1], 'the version shown is the cache name');
 });
 test('public-repo safety: no .aaib or .aaio file and no JSON over 100 KB', () => {
   const bad = [];
@@ -281,47 +383,84 @@ test('follow-up attaches to a customer or to a lead entered on the phone', async
   assert.equal(fu[0].due, '2026-11-01');
 });
 
-// Drives Export -> passphrases -> Create file. Returns what share() was given (if share exists).
-async function exportFlow(t, { share, pass } = {}) {
+// Sets the outbox passphrase from Settings (typed twice).
+async function setObpass(t, pass) {
+  t.$('setBtn').click(); await tick(60);
+  const S = t.$('tab-settings'); type(t.w, S.querySelector('[aria-label="Outbox passphrase"]'), pass); type(t.w, S.querySelector('[aria-label="Outbox passphrase again"]'), pass);
+  click(S, 'Set outbox passphrase'); await tick(150); t.$('tab-outbox').hidden = true;
+}
+// Settings -> PIN -> Show. Returns the passphrase text shown (or the error).
+async function shownPass(t, pin) {
+  t.$('setBtn').click(); await tick(60);
+  const S = t.$('tab-settings'); type(t.w, S.querySelector('[aria-label="PIN to show the outbox passphrase"]'), pin); click(S, 'Show'); await tick(300);
+  const b = S.querySelector('.card b'); return b ? b.textContent : S.textContent;
+}
+// Drives Export. With a saved outbox passphrase there is nothing to type; otherwise types it twice. Returns what share() was given.
+async function exportFlow(t, { share, pass, ask } = {}) {
   const shared = [];
   Object.defineProperty(t.w.navigator, 'canShare', { configurable: true, value: share ? () => true : undefined });
   Object.defineProperty(t.w.navigator, 'share', { configurable: true, value: share ? async (d) => { shared.push(d); if (share === 'abort') { const e = new Error('x'); e.name = 'AbortError'; throw e; } } : undefined });
   t.w.URL.createObjectURL = () => 'blob:test'; t.w.URL.revokeObjectURL = () => {};
+  t.$('tab-outbox').hidden = false;
   const box = t.$('tab-outbox'); click(box, 'Export');
-  const [a, b] = box.querySelectorAll('input[type=password]'); a.value = pass || OPASS; b.value = pass || OPASS;
-  click(box, 'Create file'); for (let i = 0; i < 100 && !/File ready/.test(box.textContent); i++) await tick(30);
+  if (ask) {
+    await tick(60); assert.equal(box.querySelectorAll('input[type=password]').length, 2, 'asks for the outbox passphrase');
+    const [a, b] = box.querySelectorAll('input[type=password]'); a.value = pass || OPASS; b.value = pass || OPASS; click(box, 'Create file');
+  } else assert.ok(!box.querySelector('input[type=password]'), 'no typing once the outbox passphrase is saved');
+  for (let i = 0; i < 100 && !/File ready/.test(box.textContent); i++) await tick(30);
   return shared;
 }
 const readFile = (w, f) => new Promise((res) => { const r = new w.FileReader(); r.onload = () => res(r.result); r.readAsText(f); });
 
-test('export round trip: file layout, decrypt, JSON shape, marks only after share completes', async () => {
+test('export round trip: first export asks once, then reuses; file decrypts on the console path; marks only after share', async () => {
   const t = await unlocked(); await lead(t, 'Show Lead Co');
   await quote(t, [['Panda A', 6], ['Panda B', 4]]); click(t.$('tab-new'), 'Save to outbox'); await tick(60);
-  const shared = await exportFlow(t, { share: true });
+  const shared = await exportFlow(t, { share: true, ask: true });
   assert.match(t.$('tab-outbox').textContent, /aai-outbox-\d{4}-\d\d-\d\d-\d{4}\.aaio/);
   assert.equal((await dump(t.w)).filter((r) => r.exportedAt).length, 0, 'not marked before sharing');
   click(t.$('tab-outbox'), 'Share'); await tick(80);
   assert.equal(shared.length, 1);
   const text = await readFile(t.w, shared[0].files[0]);
   assert.deepEqual(Object.keys(JSON.parse(text)).sort(), ['ct', 'iv', 'salt', 'v']); assert.ok(!text.includes('Show Lead'));
-  const o = await core.openOutbox(text, OPASS, webcrypto.subtle);
+  const o = await unseal(text, OPASS);                 // independent of the app's code, as the console does it
   assert.equal(o.version, 1); assert.ok(o.createdAt); assert.equal(o.deviceLabel, 'iPhone'); assert.equal(o.records.length, 2);
+  assert.deepEqual(Object.keys(await core.openOutbox(text, OPASS, webcrypto.subtle)), Object.keys(o));
   const q = o.records.find((r) => r.kind === 'quote');
   assert.deepEqual([q.total, q.priceListDate, q.lines[0].name, q.lines[0].qty, q.lines[0].unitPrice, q.lines[0].lineTotal, q.lines[0].priceListDate], [810, 'Price list TEST', 'Panda A', 6, 90, 540, 'Price list TEST']);
   assert.ok(o.records.every((r) => !('exportedAt' in r) && r.id && r.createdAt && r.appVersion));
   assert.equal((await dump(t.w)).filter((r) => r.exportedAt).length, 2, 'marked after share completed');
-  assert.equal(t.$('badge').hidden, true);
-  assert.match(t.$('tab-outbox').textContent, /Exported, kept 30 days/);
+  assert.equal(t.$('badge').hidden, true); assert.match(t.$('tab-outbox').textContent, /Exported, kept 30 days/);
+  // second export, even after a lock and a PIN unlock: no typing, same passphrase
+  await lead(t, 'Second Co'); t.$('lockBtn').click(); await t.unlock(PASS); await tick(80);
+  const again = await exportFlow(t, { share: true }); click(t.$('tab-outbox'), 'Share'); await tick(80);
+  const o2 = await unseal(await readFile(t.w, again[0].files[0]), OPASS);
+  assert.deepEqual(o2.records.map((r) => r.company), ['Second Co']);
+  const stored = JSON.stringify(await rawKv(t.w)); assert.ok(!stored.includes(OPASS), 'outbox passphrase is not stored in the clear');
+});
+test('outbox passphrase from Settings: 8+ chars twice; shown only after the PIN; used by export', async () => {
+  const t = await unlocked(); await lead(t, 'Show Lead Co');
+  t.$('setBtn').click(); await tick(60);
+  const S = t.$('tab-settings'), fill = (l, v) => type(t.w, S.querySelector('[aria-label="' + l + '"]'), v);
+  fill('Outbox passphrase', 'short'); fill('Outbox passphrase again', 'short'); click(S, 'Set outbox passphrase'); await tick(100); assert.match(S.textContent, /8 or more/);
+  fill('Outbox passphrase', OPASS); fill('Outbox passphrase again', OPASS + 'x'); click(S, 'Set outbox passphrase'); await tick(100); assert.match(S.textContent, /differ/);
+  t.$('setBtn').click(); await tick(60); assert.ok(![...t.$('tab-settings').querySelectorAll('button')].some((b) => b.textContent === 'Show'), 'no Show button before it is set');
+  assert.ok(!(await rawKv(t.w)).obpass);
+  await setObpass(t, OPASS); assert.ok((await rawKv(t.w)).obpass);
+  assert.notEqual(await shownPass(t, otherPin(PIN)), OPASS); assert.match(t.$('tab-settings').textContent, /Wrong PIN/);
+  setT(t, 20000); assert.equal(await shownPass(t, PIN), OPASS);
+  const shared = await exportFlow(t, { share: true }); click(t.$('tab-outbox'), 'Share'); await tick(80);
+  assert.deepEqual((await unseal(await readFile(t.w, shared[0].files[0]), OPASS)).records.map((r) => r.company), ['Show Lead Co']);
+  t.$('lockBtn').click(); assert.ok(!/outbox-pass|Outbox passphrase/.test(t.$('tab-settings').textContent), 'cleared on lock');
 });
 test('wrong passphrase on the exported file fails; tampering fails', async () => {
-  const t = await unlocked(); await lead(t, 'Show Lead Co');
+  const t = await unlocked(); await lead(t, 'Show Lead Co'); await setObpass(t, OPASS);
   const shared = await exportFlow(t, { share: true }); click(t.$('tab-outbox'), 'Share'); await tick(80);
   const text = await readFile(t.w, shared[0].files[0]);
   await assert.rejects(core.openOutbox(text, 'wrong-wrong-wrong', webcrypto.subtle), /Wrong passphrase/);
   await assert.rejects(core.openOutbox(await seal(fixture(), PASS), OPASS, webcrypto.subtle), /not a version 1 outbox|Wrong passphrase/);
 });
-test('export marks nothing when share is cancelled; "I sent it" marks; mismatched passphrases are refused', async () => {
-  const t = await unlocked(); await lead(t, 'Show Lead Co');
+test('export marks nothing when share is cancelled; "I sent it" marks; mismatched first-export passphrases are refused', async () => {
+  const t = await unlocked(); await lead(t, 'Show Lead Co'); await setObpass(t, OPASS);
   await exportFlow(t, { share: 'abort' }); click(t.$('tab-outbox'), 'Share'); await tick(80);
   assert.match(t.$('tab-outbox').textContent, /Nothing is marked as sent/);
   assert.equal((await dump(t.w)).filter((r) => r.exportedAt).length, 0);
@@ -332,13 +471,14 @@ test('export marks nothing when share is cancelled; "I sent it" marks; mismatche
   assert.equal((await dump(t.w))[0].exportedAt, null);
   click(t.$('tab-outbox'), 'I sent it'); await tick(80);
   assert.ok((await dump(t.w))[0].exportedAt);
-  // mismatched passphrases
-  await lead(t, 'Second Co'); const box = t.$('tab-outbox'); click(box, 'Export');
+  // a phone with no saved outbox passphrase: mismatched or short entries are refused
+  const u = await unlocked(); await lead(u, 'Second Co'); const box = u.$('tab-outbox'); click(box, 'Export'); await tick(60);
   const [a, b] = box.querySelectorAll('input[type=password]'); a.value = OPASS; b.value = OPASS + 'x'; click(box, 'Create file');
-  assert.match(box.textContent, /differ/); assert.ok(!/File ready/.test(box.textContent));
+  assert.match(box.textContent, /differ/); assert.ok(!/File ready/.test(box.textContent)); assert.ok(!(await rawKv(u.w)).obpass);
+  a.value = 'short'; b.value = 'short'; click(box, 'Create file'); assert.match(box.textContent, /8 or more/);
 });
 test('exported records are kept 30 days for re-export, then purged', async () => {
-  const t = await unlocked(); await lead(t, 'Show Lead Co');
+  const t = await unlocked(); await lead(t, 'Show Lead Co'); await setObpass(t, OPASS);
   await exportFlow(t, {}); click(t.$('tab-outbox'), 'I sent it'); await tick(80);
   const [r] = await dump(t.w);
   const real = t.w.Date.now, nowMs = real();
@@ -426,4 +566,57 @@ test('re-export note shows only when the bundle has no ta data', async () => {
   const old = await unlocked(withTa(undefined)); assert.match(old.$('tab-prices').textContent, NOTE);
   click(old.$('tab-new'), 'Quote request or order'); assert.match(old.$('tab-new').textContent, NOTE);
   const cur = await unlocked(withTa(false)); assert.ok(!NOTE.test(cur.$('tab-prices').textContent));
+});
+
+/* ---------- visible version, uncached shell fetches, update banner ---------- */
+function loadSw(cached) {
+  const log = { added: [], fetched: [] }, handlers = {};
+  class Request { constructor(u, o) { this.url = typeof u === 'string' ? 'https://aai.test/aai-mobile/' + u : u.url; this.method = 'GET'; this.cache = o && o.cache; } }
+  const cache = { addAll: async (rs) => { log.added.push(...rs); }, match: async () => cached, put: async () => {} };
+  const ctx = { URL, Request, caches: { open: async () => cache, keys: async () => [], delete: async () => {} }, fetch: async (r) => { log.fetched.push(r); return { ok: true, clone() { return this; } }; },
+    self: { addEventListener: (n, f) => { handlers[n] = f; }, location: { origin: 'https://aai.test' }, skipWaiting: async () => {}, clients: { claim: async () => {} } } };
+  ctx.self.caches = ctx.caches; vm.createContext(ctx);
+  const shell = vm.runInContext(read('sw.js') + '\n;SHELL', ctx);
+  return { log, handlers, shell, Request };
+}
+test('service worker fetches every shell file uncached (cache: reload) on install and on refresh', async () => {
+  const s = loadSw(null);
+  let p; s.handlers.install({ waitUntil: (x) => { p = x; } }); await p;
+  assert.deepEqual(s.log.added.map((r) => r.url.replace('https://aai.test/aai-mobile/', '')), [...s.shell]);
+  assert.ok(s.log.added.every((r) => r.cache === 'reload'), 'install requests bypass the HTTP cache');
+  for (const hit of [null, { cached: true }]) {   // with or without a cached copy, the background refresh is uncached
+    const w = loadSw(hit); let resp;
+    w.handlers.fetch({ request: new w.Request('app.js'), respondWith: (x) => { resp = x; } }); await resp;
+    await tick(10); assert.equal(w.log.fetched.length, 1); assert.equal(w.log.fetched[0].cache, 'reload');
+  }
+});
+test('update banner: shows when a new worker finishes installing under an old one, reloads on tap, survives Lock, not on first install', async () => {
+  const mk = (controller) => {
+    const l = {}, wl = {}, worker = { state: 'installing', addEventListener: (n, f) => { wl[n] = f; } };
+    const reg = { installing: null, waiting: null, addEventListener: (n, f) => { l[n] = f; }, update: async () => {} };
+    return { l, wl, worker, reg, sw: { controller, register: async () => reg, addEventListener() {} } };
+  };
+  const m = mk({}), t = boot(undefined, (w) => Object.defineProperty(w.navigator, 'serviceWorker', { value: m.sw, configurable: true })); await tick(30);
+  assert.equal(t.$('update').hidden, true); assert.equal(t.$('update').textContent, 'Update ready, tap to reload');
+  m.reg.installing = m.worker; m.l.updatefound(); m.wl.statechange(); assert.equal(t.$('update').hidden, true, 'still installing');
+  m.worker.state = 'installed'; m.wl.statechange(); assert.equal(t.$('update').hidden, false);
+  t.$('lockBtn').click(); assert.equal(t.$('update').hidden, false, 'Lock does not hide it');
+  let reloaded = 0; t.w.AAIApp.reload = () => { reloaded++; }; t.$('update').click(); assert.equal(reloaded, 1);
+  const f = mk(null), t2 = boot(undefined, (w) => Object.defineProperty(w.navigator, 'serviceWorker', { value: f.sw, configurable: true })); await tick(30);
+  f.reg.installing = f.worker; f.l.updatefound(); f.worker.state = 'installed'; f.wl.statechange();
+  assert.equal(t2.$('update').hidden, true, 'first install has no older worker, so no banner');
+});
+
+/* ---------- repo safety: no PINs, no secrets, no data files tracked ---------- */
+test('repo safety: no .aaib/.aaio tracked and no PIN-like literal in any tracked file', () => {
+  const files = execFileSync('git', ['ls-files'], { cwd: ROOT, encoding: 'utf8' }).split('\n').filter(Boolean);
+  assert.deepEqual(files.filter((f) => /\.aaio?$/i.test(f)), []);
+  const hits = [];
+  for (const f of files) {
+    if (/\.(png|jpg|ico)$/i.test(f) || !fs.existsSync(path.join(ROOT, f))) continue;
+    read(f).split('\n').forEach((line, i) => {
+      if (/\b\w*pin\w*\b\s*[:=,(]\s*['"`]\d{4,8}['"`]/i.test(line) || /\bpin\b[^\n]{0,24}['"`]\d{4,8}['"`]/i.test(line)) hits.push(f + ':' + (i + 1));
+    });
+  }
+  assert.deepEqual(hits, [], 'PIN-like literal tracked');
 });

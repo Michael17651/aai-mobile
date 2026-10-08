@@ -22,12 +22,22 @@ Public only because free GitHub Pages needs it. The repo is CODE ONLY: no custom
 
 1. In the console: Saved intake, Admin, **Export phone bundle**. Choose a passphrase (8+ characters). It downloads `aai-phone-bundle-YYYYMMDD.aaib`.
 2. **AirDrop** the file to the phone, and tap **Save to Files** (or save it from Mail/Messages into the Files app).
-3. In AAI Mobile tap **Import a bundle file**, pick the file in Files, type the passphrase, tap Unlock.
-4. The app decrypts it in memory, re-computes every price check, then stores the still-encrypted file on the phone. You see a green "Prices verified, N checks", or a red "Price check failed, do not quote from this phone" (the price screens stay closed).
+3. In AAI Mobile tap **Import a bundle file**, pick the file in Files, type the bundle passphrase, tap Open bundle.
+4. The app decrypts it in memory and re-computes every price check. You see a green "Prices verified, N checks", or a red "Price check failed, do not quote from this phone" (the price screens stay closed).
+5. It then asks you to **choose a PIN** (4 to 8 digits, typed twice). That is the last time the bundle passphrase is needed on this phone.
 
-**Re-import:** do the same with a newer file; it replaces the stored one. The header warns amber after 7 days and red after 30 days from the bundle date, so re-import when it turns amber.
+**Re-import:** do the same with a newer file; it replaces the stored bundle and asks for a PIN again. The header warns amber after 7 days and red after 30 days from the bundle date, so re-import when it turns amber.
 
-The app locks at every cold start and after 5 minutes idle (or the Lock button), wiping decrypted data from memory; unlocking needs the passphrase again. The passphrase is never stored, logged or put in a URL.
+**Updating from an older version:** a phone that already holds a bundle from before PINs asks for the bundle passphrase once on first open, then walks through choosing a PIN.
+
+## Lock model (read this)
+
+- The bundle is stored on the phone encrypted with a random AES-GCM data key. That key is wrapped by a key derived from your PIN (PBKDF2-SHA256, 600,000 iterations, random salt) and stored in IndexedDB. Neither the PIN nor the bundle passphrase is stored.
+- **The PIN is a screen lock.** A 4 to 8 digit PIN can be guessed offline by anyone who copies the app's storage off the phone. The real protection is the **iPhone passcode and iPhone device encryption**. Keep a strong passcode.
+- **5 wrong PINs in a row delete the stored bundle** (and its outbox passphrase) and show "Too many wrong PINs. Import the phone bundle again with its passphrase." After each wrong PIN you wait 1, 2, 4, then 8 seconds. The count lives in IndexedDB and resets on a correct PIN. Unexported outbox records are not bundle data and are kept.
+- The app locks at every cold start, after 5 minutes idle, and with the Lock button, wiping decrypted data from memory and returning to the PIN screen.
+- **Settings** (top bar): Change PIN (asks for the current PIN), the Outbox passphrase (set; Show after re-entering the PIN), and Delete bundle from this phone (asks first; keeps the outbox).
+- Version and cache name (`Version 2.1.0 · cache aai-mobile-v6`) show on the lock screen and in Settings. When a new version finishes installing while the app is open, an "Update ready, tap to reload" bar appears. The service worker fetches the app files with `cache: 'reload'`, so GitHub Pages' 10 minute cache cannot serve a stale copy.
 
 **Safari storage caveat:** if you use it as a plain Safari tab (not added to the Home Screen), Safari may delete site storage, including the saved bundle, after 7 days without use. The Home Screen app is not subject to that. If the saved bundle is gone, import the file again.
 
@@ -45,7 +55,7 @@ On **Prices**, each card has a Quantity box (whole numbers 1 to 9999). It highli
 
 The **New** tab captures a lead/new customer (with "met at" and hot/warm/cold), a quote request or order (catalog lines priced with the same engine as Price check; call-for-price items show "Call for price", never $0), or a follow-up note (for a customer or a lead on the phone). Each is saved to the **Outbox** (IndexedDB on the phone, count badge on the tab) and can be edited or deleted until exported. Nothing is sent by the app.
 
-**Outbox, Export** asks for a passphrase twice, encrypts all unexported records into `aai-outbox-YYYY-MM-DD-HHMM.aaio` (same crypto and layout as `.aaib`), and opens the iOS share sheet (or offers a download). Records are marked exported only after the share finishes or you tap "I sent it", and stay listed for 30 days so a lost file can be re-exported. The outbox is customer data: it is stored unencrypted on the phone (iOS device encryption applies; the app's lock hides it from the screen), and `*.aaio` is gitignored and test-checked. The JSON format is in CLAUDE.md.
+**Outbox, Export** uses the **Outbox passphrase** (8+ characters, typed twice once: in Settings or on your first export). It is stored on the phone under the PIN, so later exports need no typing; read it in Settings (Show, after re-entering the PIN) when the console asks for it. Export encrypts all unexported records into `aai-outbox-YYYY-MM-DD-HHMM.aaio` (same crypto and layout as `.aaib`, format unchanged), and opens the iOS share sheet (or offers a download). Records are marked exported only after the share finishes or you tap "I sent it", and stay listed for 30 days so a lost file can be re-exported. The outbox is customer data: it is stored unencrypted on the phone (iOS device encryption applies; the PIN lock only hides it from the screen), and `*.aaio` is gitignored and test-checked. The JSON format is in CLAUDE.md.
 
 ## Bundle format (version 1)
 
@@ -55,7 +65,7 @@ Layout: the shell is `position:fixed; inset:0` (no `100dvh`, which left a gap un
 
 ## Files
 
-`index.html`, `styles.css`, `core.js` (crypto, pricing, self-check, search), `app.js` (UI), `sw.js` (offline shell cache), `manifest.webmanifest`, icons. System fonts only, no CDN, no external requests.
+`index.html`, `styles.css`, `core.js` (crypto, pricing, self-check, search), `app.js` (UI), `sw.js` (offline shell cache, uncached fetches), `manifest.webmanifest`, icons. System fonts only, no CDN, no external requests.
 
 ## Tests
 

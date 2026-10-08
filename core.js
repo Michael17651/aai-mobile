@@ -30,10 +30,31 @@
     } catch (e) { throw new Error('Wrong passphrase, or the file is damaged.'); }
   }
   async function open(text, pass, subtle) {
-    const bundle = await decrypt(text, pass, subtle, 'phone bundle');
+    return checkBundle(await decrypt(text, pass, subtle, 'phone bundle'));
+  }
+  function checkBundle(bundle) {
     if (!bundle || bundle.version !== 1 || !['customers', 'catalog', 'followUps', 'checks'].every((k) => Array.isArray(bundle[k]))) throw new Error('The bundle is not a version 1 bundle.');
     return bundle;
   }
+  /* ---------- PIN vault: random AES-GCM data key; the key is wrapped by a PBKDF2 key derived from the PIN ---------- */
+  const S = () => root.crypto.subtle, rnd = (n) => root.crypto.getRandomValues(new Uint8Array(n));
+  const gcm = async (key, bytes) => { const iv = rnd(12); return { iv: toB64(iv), ct: toB64(new Uint8Array(await S().encrypt({ name: 'AES-GCM', iv }, key, bytes))) }; };
+  const gcmOpen = async (key, r) => new Uint8Array(await S().decrypt({ name: 'AES-GCM', iv: fromB64(r.iv) }, key, fromB64(r.ct)));
+  async function wrapKey(dk, pin) {
+    const salt = rnd(16), k = await aesKey(pin, salt, 'encrypt', S());
+    return Object.assign({ v: 2, salt: toB64(salt) }, await gcm(k, new Uint8Array(await S().exportKey('raw', dk))));
+  }
+  async function unwrap(w, pin) {
+    try { return await S().importKey('raw', await gcmOpen(await aesKey(pin, fromB64(w.salt), 'decrypt', S()), w), 'AES-GCM', true, ['encrypt', 'decrypt']); }
+    catch (e) { throw new Error('Wrong PIN'); }
+  }
+  const sealKey = (dk, obj) => gcm(dk, new TextEncoder().encode(JSON.stringify(obj)));
+  const openKey = async (dk, r) => JSON.parse(new TextDecoder().decode(await gcmOpen(dk, r)));
+  async function newVault(bundle, pin) {
+    const dk = await S().generateKey({ name: 'AES-GCM', length: 256 }, true, ['encrypt', 'decrypt']);
+    return { dk, wrap: await wrapKey(dk, pin), vault: await sealKey(dk, bundle) };
+  }
+
   async function openOutbox(text, pass, subtle) {
     const o = await decrypt(text, pass, subtle, 'outbox file');
     if (!o || o.version !== 1 || !Array.isArray(o.records)) throw new Error('The file is not a version 1 outbox.');
@@ -148,6 +169,6 @@
 
   const stamp = (d) => dayStr(d) + '-' + String(d.getHours()).padStart(2, '0') + String(d.getMinutes()).padStart(2, '0');
 
-  const api = { open, seal, openOutbox, priceLines, stamp, find, isCall, tierPrice, tierLabels, priceQuote, selfCheck, searchCustomers, searchCatalog, dueClass, ageClass, dayStr, digits };
+  const api = { open, checkBundle, newVault, wrapKey, unwrap, sealKey, openKey, seal, openOutbox, priceLines, stamp, find, isCall, tierPrice, tierLabels, priceQuote, selfCheck, searchCustomers, searchCatalog, dueClass, ageClass, dayStr, digits };
   if (typeof module !== 'undefined' && module.exports) module.exports = api; else root.AAICore = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this);

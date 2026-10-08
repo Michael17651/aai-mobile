@@ -18,20 +18,35 @@
 <body>
 <header id="head">
   <span id="bundleAge">No bundle</span>
-  <button id="lockBtn" type="button" hidden>Lock</button>
+  <span class="hb"><button id="setBtn" type="button" hidden>Settings</button><button id="lockBtn" type="button" hidden>Lock</button></span>
 </header>
+<button id="update" type="button" hidden>Update ready, tap to reload</button>
 
 <main id="lockView">
   <h1>AAI Mobile</h1>
   <p id="lockHint"></p>
-  <form id="unlockForm" autocomplete="off">
-    <label for="pass">Passphrase</label>
+  <form id="pinForm" autocomplete="off" hidden>
+    <label for="pin">PIN</label>
+    <input id="pin" type="password" inputmode="numeric" pattern="[0-9]*" maxlength="8" autocomplete="off">
+    <button id="pinBtn" type="submit">Unlock</button>
+  </form>
+  <form id="passForm" autocomplete="off" hidden>
+    <label for="pass">Bundle passphrase</label>
     <input id="pass" type="password" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false">
-    <button id="unlockBtn" type="submit">Unlock</button>
+    <button id="passBtn" type="submit">Open bundle</button>
+  </form>
+  <form id="newPinForm" autocomplete="off" hidden>
+    <label for="pin1">New PIN (4 to 8 digits)</label>
+    <input id="pin1" type="password" inputmode="numeric" pattern="[0-9]*" maxlength="8" autocomplete="off">
+    <label for="pin2">PIN again</label>
+    <input id="pin2" type="password" inputmode="numeric" pattern="[0-9]*" maxlength="8" autocomplete="off">
+    <button id="newPinBtn" type="submit">Save PIN and open</button>
   </form>
   <input id="file" type="file" hidden>
   <button id="importBtn" type="button" class="secondary">Import a bundle file</button>
+  <button id="cancelBtn" type="button" class="secondary" hidden>Cancel</button>
   <p id="lockMsg" role="status"></p>
+  <p id="ver" class="meta"></p>
 </main>
 
 <div id="appView" hidden>
@@ -41,6 +56,7 @@
   <section id="tab-followups" hidden></section>
   <section id="tab-new" hidden></section>
   <section id="tab-outbox" hidden></section>
+  <section id="tab-settings" hidden></section>
   <nav id="tabs">
     <button type="button" data-tab="prices" class="on">Prices</button>
     <button type="button" data-tab="customers">Customers</button>

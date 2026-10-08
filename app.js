@@ -1,18 +1,22 @@
 /* UI. Decrypted data lives only in `data` (memory); lock() drops it and empties the screens.
-   The passphrase is read, used and cleared; never stored, logged or put in a URL. */
+   Passphrases and the PIN are read, used and cleared; never stored in the clear, logged or put in a URL.
+   On disk: the bundle sealed under a random data key, that key wrapped under the PIN (a screen lock, not strong protection). */
 (function () {
   'use strict';
   const C = AAICore, $ = (id) => document.getElementById(id);
   const IDLE_MS = 5 * 60 * 1000;
-  const APP_VERSION = '2.0.0', KEEP_DAYS = 30;
-  let data = null, check = null, pending = null, lastActive = Date.now(), customers = [], selected = null;
+  const APP_VERSION = '2.1.0', CACHE_NAME = 'aai-mobile-v6' /* must equal CACHE in sw.js (tested) */, KEEP_DAYS = 30, MAX_TRIES = 5, PINRE = /^\d{4,8}$/;
+  const WRONG_END = 'Too many wrong PINs. Import the phone bundle again with its passphrase.';
+  let data = null, dk = null, staged = null, check = null, pending = null, lastActive = Date.now(), customers = [], selected = null;
   let ob = [], deviceLabel = 'iPhone', xport = null, qtys = new Map();
 
   /* ----- storage: the still-encrypted file text, in IndexedDB ----- */
   const idb = () => new Promise((res, rej) => { const r = indexedDB.open('aai-mobile', 2); r.onupgradeneeded = () => { const d = r.result; if (!d.objectStoreNames.contains('kv')) d.createObjectStore('kv'); if (!d.objectStoreNames.contains('outbox')) d.createObjectStore('outbox', { keyPath: 'id' }); }; r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); });
   const kv = async (mode, fn, store) => { store = store || 'kv'; const db = await idb(); return new Promise((res, rej) => { const t = db.transaction(store, mode), rq = fn(t.objectStore(store)); t.oncomplete = () => { db.close(); res(rq.result); }; t.onerror = () => rej(t.error); }); };
-  const loadStored = () => kv('readonly', (s) => s.get('bundle'));
-  const saveStored = (text) => kv('readwrite', (s) => s.put(text, 'bundle'));
+  const get = (k) => kv('readonly', (s) => s.get(k));
+  const set = (k, v) => kv('readwrite', (s) => s.put(v, k));
+  // Bundle data only. The outbox store and the device label are untouched.
+  const wipeBundle = () => kv('readwrite', (s) => ['wrap', 'vault', 'bundle', 'obpass', 'fails'].map((k) => s.delete(k)).pop());
   const obAll = () => kv('readonly', (s) => s.getAll(), 'outbox');
   const obPut = (r) => kv('readwrite', (s) => s.put(r), 'outbox');
   const obDel = (id) => kv('readwrite', (s) => s.delete(id), 'outbox');
@@ -30,48 +34,92 @@
   const link = (scheme, val, label) => h('a', { class: 'act', href: scheme + ':' + val }, label);
 
   /* ----- lock / unlock ----- */
+  const verText = () => 'Version ' + APP_VERSION + ' · cache ' + CACHE_NAME;
   function touch() { lastActive = Date.now(); }
   function lock() {
-    endExport(); data = null; check = null; customers = []; selected = null; pending = null; ob = []; qtys = new Map();
+    endExport(); data = null; dk = null; staged = null; check = null; customers = []; selected = null; pending = null; ob = []; qtys = new Map();
     $('badge').hidden = true;
-    ['tab-prices', 'tab-customers', 'tab-followups', 'tab-new', 'tab-outbox', 'banner'].forEach((id) => $(id).replaceChildren());
-    $('pass').value = ''; $('file').value = '';
-    $('appView').hidden = true; $('lockView').hidden = false; $('lockBtn').hidden = true;
+    ['tab-prices', 'tab-customers', 'tab-followups', 'tab-new', 'tab-outbox', 'tab-settings', 'banner'].forEach((id) => $(id).replaceChildren());
+    ['pass', 'pin', 'pin1', 'pin2', 'file'].forEach((id) => { $(id).value = ''; });
+    $('appView').hidden = true; $('lockView').hidden = false; $('lockBtn').hidden = true; $('setBtn').hidden = true;
     $('bundleAge').textContent = 'Locked'; $('bundleAge').className = '';
     refreshLockScreen();
   }
+  // Which step the lock screen is on: none | pin (saved vault) | pass (a file, or a bundle from before PINs) | setpin (opened, choosing a PIN).
   async function refreshLockScreen() {
-    let stored = null;
-    try { stored = await loadStored(); } catch (e) { /* no storage: import only */ }
-    const hasFile = stored || pending;
-    $('lockHint').textContent = pending ? 'Enter the passphrase for ' + pending.name + '.' : stored ? 'Enter the passphrase to unlock the saved bundle.' : 'No bundle yet. Import the .aaib file from the console.';
-    $('unlockForm').hidden = !hasFile;
-    $('importBtn').textContent = stored || pending ? 'Import a different bundle' : 'Import a bundle file';
+    let vault = null, old = null;
+    try { vault = await get('vault'); old = await get('bundle'); } catch (e) { /* no storage: import only */ }
+    const mode = staged ? 'setpin' : pending || old ? 'pass' : vault ? 'pin' : 'none';
+    $('pinForm').hidden = mode !== 'pin'; $('passForm').hidden = mode !== 'pass'; $('newPinForm').hidden = mode !== 'setpin';
+    $('cancelBtn').hidden = !(pending || staged); $('importBtn').hidden = mode === 'setpin';
+    $('lockHint').textContent = { none: 'No bundle yet. Import the .aaib file from the console.', pin: 'Enter your PIN.',
+      pass: pending ? 'Enter the passphrase for ' + pending.name + '. You will then choose a PIN.' : 'This phone holds a bundle from an older version. Enter its passphrase one last time, then choose a PIN.',
+      setpin: 'Bundle opened. Choose a PIN (4 to 8 digits). It unlocks the app on this phone; the passphrase is not kept.' }[mode];
+    $('importBtn').textContent = vault || old || pending ? 'Import a different bundle' : 'Import a bundle file';
+    $('ver').textContent = verText();
   }
-  async function unlock(e) {
+  // Checks a PIN against the saved wrapped key and keeps the wrong-try count in IndexedDB. Returns the data key.
+  // Throws: a short wait after each wrong try (1, 2, 4, 8 s); on the 5th in a row, wipes the bundle (e.wiped).
+  async function tryPin(pin) {
+    const f = (await get('fails')) || { n: 0, until: 0 }, now = Date.now();
+    if (now < f.until) throw new Error('Wait ' + Math.ceil((f.until - now) / 1000) + ' s before trying again.');
+    const w = await get('wrap'); if (!w) throw new Error('No bundle on this phone.');
+    try { const k = await C.unwrap(w, pin); if (f.n) await set('fails', { n: 0, until: 0 }); return k; } catch (e) { /* wrong */ }
+    const n = f.n + 1;
+    if (n >= MAX_TRIES) { await wipeBundle(); const x = new Error(WRONG_END); x.wiped = true; throw x; }
+    const wait = 2 ** (n - 1);
+    await set('fails', { n, until: Date.now() + wait * 1000 });
+    throw new Error('Wrong PIN. Try again in ' + wait + ' s.');
+  }
+  const guard = async (msg, fn) => {
+    try { await fn(); } catch (e) { if (e.wiped) { lock(); $('lockMsg').textContent = e.message; } else msg.textContent = e.message; }
+  };
+  async function unlockPin(e) {
+    e.preventDefault();
+    const pin = $('pin').value; $('pin').value = '';
+    $('lockMsg').textContent = '';
+    if (!pin) return;
+    $('pinBtn').disabled = true;
+    await guard($('lockMsg'), async () => {
+      const k = await tryPin(pin);
+      const b = C.checkBundle(await C.openKey(k, await get('vault')));
+      dk = k; show(b);
+    });
+    $('pinBtn').disabled = false; if (!data) refreshLockScreen();
+  }
+  async function unlockPass(e) {
     e.preventDefault();
     const pass = $('pass').value; $('pass').value = '';
     $('lockMsg').textContent = '';
     if (!pass) return;
+    $('passBtn').disabled = true; $('lockMsg').textContent = 'Opening…';
+    try { staged = await C.open(pending ? pending.text : await get('bundle'), pass); $('lockMsg').textContent = ''; } catch (err) { $('lockMsg').textContent = err.message; }
+    $('passBtn').disabled = false; refreshLockScreen();
+  }
+  async function savePin(e) {
+    e.preventDefault();
+    const a = $('pin1').value, b = $('pin2').value, m = $('lockMsg'); $('pin1').value = $('pin2').value = '';
+    if (!PINRE.test(a)) { m.textContent = 'Use 4 to 8 digits.'; return; }
+    if (a !== b) { m.textContent = 'The two PINs differ.'; return; }
+    $('newPinBtn').disabled = true; m.textContent = 'Saving…';
     try {
-      const text = pending ? pending.text : await loadStored();
-      $('unlockBtn').disabled = true; $('lockMsg').textContent = 'Opening…';
-      const b = await C.open(text, pass);
-      if (pending) { await saveStored(text); pending = null; }
-      show(b);
-    } catch (err) { $('lockMsg').textContent = err.message; }
-    $('unlockBtn').disabled = false;
+      const v = await C.newVault(staged, a);
+      // New data key, so any earlier outbox passphrase (sealed under the old key) goes; the old-format bundle goes too.
+      await kv('readwrite', (s) => { s.put(v.wrap, 'wrap'); s.put(v.vault, 'vault'); s.put({ n: 0, until: 0 }, 'fails'); s.delete('obpass'); return s.delete('bundle'); });
+      const bundle = staged; staged = null; pending = null; dk = v.dk; show(bundle);
+    } catch (err) { m.textContent = 'Could not save on this phone.'; }
+    $('newPinBtn').disabled = false;
   }
   async function pick() {
     const f = $('file').files[0]; if (!f) return;
-    pending = { name: f.name, text: await f.text() };
+    pending = { name: f.name, text: await f.text() }; staged = null;
     $('lockMsg').textContent = ''; refreshLockScreen(); $('pass').focus();
   }
 
   function show(b) {
     data = b; check = C.selfCheck(b); customers = b.customers.slice().sort((a, b) => a.name.localeCompare(b.name)); qtys = new Map(); touch();
     $('lockMsg').textContent = '';
-    $('lockView').hidden = true; $('appView').hidden = false; $('lockBtn').hidden = false;
+    $('lockView').hidden = true; $('appView').hidden = false; $('lockBtn').hidden = false; $('setBtn').hidden = false;
     const age = $('bundleAge'); age.textContent = 'Bundle from ' + dateText(b.createdAt); age.className = C.ageClass(b.createdAt, new Date());
     const bn = $('banner');
     put(bn, check.ok
@@ -82,7 +130,7 @@
     loadOb().then(renderOutbox);
   }
   function tab(name) {
-    ['prices', 'customers', 'followups', 'new', 'outbox'].forEach((t) => { $('tab-' + t).hidden = t !== name; });
+    ['prices', 'customers', 'followups', 'new', 'outbox', 'settings'].forEach((t) => { $('tab-' + t).hidden = t !== name; });
     document.querySelectorAll('#tabs button').forEach((x) => x.classList.toggle('on', x.dataset.tab === name));
   }
 
@@ -359,7 +407,25 @@
       field('Device label (goes in the export)', label));
   }
   function endExport() { if (xport && xport.url && URL.revokeObjectURL) URL.revokeObjectURL(xport.url); xport = null; }
-  function startExport(recs) { xport = { ids: recs.map((r) => r.id) }; renderOutbox(); }
+  const getObPass = async () => { const r = await get('obpass'); return r ? (await C.openKey(dk, r)).pass : null; };
+  const setObPass = async (p) => set('obpass', await C.sealKey(dk, { pass: p }));
+  // With a saved outbox passphrase the file is built straight away; otherwise the panel asks for one (twice) and saves it.
+  async function startExport(recs) {
+    const x = xport = { ids: recs.map((r) => r.id), busy: true }; renderOutbox();
+    let p = null; try { p = await getObPass(); } catch (e) { /* ask again */ }
+    if (xport !== x) return;
+    if (p) await buildFile(p); else x.busy = false;
+    if (xport === x) renderOutbox();
+  }
+  async function buildFile(pass) {
+    const x = xport, recs = ob.filter((r) => x.ids.includes(r.id)).map((r) => { const { exportedAt, ...pub } = r; return pub; });
+    const now = new Date();
+    const text = await C.seal({ version: 1, createdAt: now.toISOString(), deviceLabel, records: recs }, pass);
+    if (xport !== x) return;
+    x.ids = recs.map((r) => r.id); x.busy = false;
+    x.file = new File([text], 'aai-outbox-' + C.stamp(now) + '.aaio', { type: 'application/octet-stream' });
+    x.url = URL.createObjectURL ? URL.createObjectURL(x.file) : null;
+  }
   async function markSent() {
     const now = new Date().toISOString();
     try { for (const id of xport.ids) { const r = ob.find((x) => x.id === id); if (r && !r.exportedAt) await obPut(Object.assign({}, r, { exportedAt: now })); } } catch (e) { xport.msg = 'Could not mark them as sent.'; renderOutbox(); return; }
@@ -377,28 +443,67 @@
         can ? btn('Share…', share) : null, x.url ? h('a', { class: 'act', href: x.url, download: x.file.name }, 'Download') : null,
         btn('I sent it', markSent), btn('Cancel', () => { endExport(); renderOutbox(); }, 'secondary'), msg);
     }
-    const p1 = inp('', { type: 'password', 'aria-label': 'Passphrase', autocapitalize: 'off', autocorrect: 'off', spellcheck: 'false' }), p2 = inp('', { type: 'password', 'aria-label': 'Passphrase again', autocapitalize: 'off', autocorrect: 'off', spellcheck: 'false' });
+    if (x.busy) return h('div', { class: 'card' }, h('p', { role: 'status' }, 'Encrypting…'));
+    const p1 = passIn('Outbox passphrase'), p2 = passIn('Outbox passphrase again');
     const go = btn('Create file', async () => {
       const a = p1.value, b = p2.value; p1.value = p2.value = '';
       if (a.length < 8) { msg.textContent = 'Use 8 or more characters.'; return; }
       if (a !== b) { msg.textContent = 'The two passphrases differ.'; return; }
       go.disabled = true; msg.textContent = 'Encrypting…';
-      const recs = ob.filter((r) => x.ids.includes(r.id)).map((r) => { const { exportedAt, ...pub } = r; return pub; });
-      const now = new Date();
-      const text = await C.seal({ version: 1, createdAt: now.toISOString(), deviceLabel, records: recs }, a);
-      x.ids = recs.map((r) => r.id);
-      x.file = new File([text], 'aai-outbox-' + C.stamp(now) + '.aaio', { type: 'application/octet-stream' });
-      x.url = URL.createObjectURL ? URL.createObjectURL(x.file) : null;
+      try { await setObPass(a); await buildFile(a); } catch (e) { msg.textContent = 'Could not create the file.'; go.disabled = false; return; }
       renderOutbox();
     });
-    return h('div', { class: 'card' }, h('p', {}, 'Choose a passphrase for this file. You will give it to the console when you import.'), field('Passphrase', p1), field('Again', p2), go, btn('Cancel', () => { endExport(); renderOutbox(); }, 'secondary'), msg);
+    return h('div', { class: 'card' }, h('p', {}, 'Choose the Outbox passphrase. It is kept on this phone under your PIN, so you type it only once. You give it to the console when you import.'), field('Outbox passphrase', p1), field('Again', p2), go, btn('Cancel', () => { endExport(); renderOutbox(); }, 'secondary'), msg);
+  }
+
+  /* ----- settings ----- */
+  const passIn = (label) => inp('', { type: 'password', 'aria-label': label, autocapitalize: 'off', autocorrect: 'off', spellcheck: 'false' });
+  const pinIn = (label) => inp('', { type: 'password', inputmode: 'numeric', pattern: '[0-9]*', maxlength: '8', 'aria-label': label });
+  async function renderSettings() {
+    const box = $('tab-settings'); let has = false;
+    try { has = !!(await get('obpass')); } catch (e) { /* treated as not set */ }
+    const m1 = h('p', { class: 'err', role: 'alert' }), m2 = h('p', { class: 'err', role: 'alert' }), m3 = h('p', { class: 'err', role: 'alert' });
+    const cur = pinIn('Current PIN'), n1 = pinIn('New PIN'), n2 = pinIn('New PIN again');
+    const changePin = btn('Change PIN', () => guard(m1, async () => {
+      const a = cur.value, b = n1.value, c = n2.value; cur.value = n1.value = n2.value = ''; m1.textContent = '';
+      if (!PINRE.test(b)) throw new Error('Use 4 to 8 digits.');
+      if (b !== c) throw new Error('The two PINs differ.');
+      await tryPin(a);
+      await set('wrap', await C.wrapKey(dk, b)); m1.textContent = 'PIN changed.';
+    }));
+    const o1 = passIn('Outbox passphrase'), o2 = passIn('Outbox passphrase again'), shown = h('div'), sp = pinIn('PIN to show the outbox passphrase');
+    const saveOb = btn(has ? 'Replace outbox passphrase' : 'Set outbox passphrase', () => guard(m2, async () => {
+      const a = o1.value, b = o2.value; o1.value = o2.value = ''; m2.textContent = '';
+      if (a.length < 8) throw new Error('Use 8 or more characters.');
+      if (a !== b) throw new Error('The two passphrases differ.');
+      await setObPass(a); await renderSettings();
+    }), 'secondary');
+    const showBtn = btn('Show', () => guard(m2, async () => {
+      const pin = sp.value; sp.value = ''; m2.textContent = '';
+      await tryPin(pin);
+      put(shown, h('div', { class: 'card' }, h('div', { class: 'meta' }, 'Outbox passphrase'), h('b', {}, await getObPass())));
+    }), 'secondary');
+    const delBox = h('div'), drawDel = () => put(delBox, btn('Delete bundle from this phone', () => put(delBox,
+      h('p', {}, 'This removes the bundle, the PIN and the outbox passphrase from this phone. Unsent outbox records stay. To use the app again you need the bundle file and its passphrase.'),
+      btn('Yes, delete the bundle', () => guard(m3, async () => { await wipeBundle(); lock(); $('lockMsg').textContent = 'Bundle deleted from this phone.'; })), btn('Cancel', drawDel, 'secondary')), 'secondary'));
+    drawDel();
+    put(box, h('h2', {}, 'Settings'), h('p', { class: 'meta' }, verText()),
+      h('h2', {}, 'Change PIN'), field('Current PIN', cur), field('New PIN (4 to 8 digits)', n1), field('New PIN again', n2), changePin, m1,
+      h('h2', {}, 'Outbox passphrase'), h('p', { class: 'meta' }, has ? 'Set. Exports use it with no typing; the console asks for it on import.' : 'Not set. Set it here or on your first export (8 or more characters).'),
+      field('Passphrase', o1), field('Again', o2), saveOb, has ? [field('PIN', sp), showBtn, shown] : null, m2,
+      h('h2', {}, 'Bundle'), delBox, m3);
   }
 
   /* ----- wiring ----- */
-  $('unlockForm').addEventListener('submit', unlock);
+  $('pinForm').addEventListener('submit', unlockPin);
+  $('passForm').addEventListener('submit', unlockPass);
+  $('newPinForm').addEventListener('submit', savePin);
   $('importBtn').onclick = () => { $('file').value = ''; $('file').click(); };
+  $('cancelBtn').onclick = () => { pending = null; staged = null; $('lockMsg').textContent = ''; refreshLockScreen(); };
   $('file').onchange = pick;
   $('lockBtn').onclick = lock;
+  $('setBtn').onclick = () => { renderSettings(); tab('settings'); };
+  $('update').onclick = () => window.AAIApp.reload();
   document.querySelectorAll('#tabs button').forEach((b) => { b.onclick = () => tab(b.dataset.tab); });
   ['click', 'keydown', 'touchstart', 'scroll', 'input'].forEach((ev) => document.addEventListener(ev, touch, { capture: true, passive: true }));
   const idleCheck = () => { if (data && Date.now() - lastActive >= IDLE_MS) lock(); };
@@ -406,7 +511,18 @@
   document.addEventListener('visibilitychange', idleCheck);
   // iOS can leave the page scrolled after the keyboard or a select closes; put the shell back.
   addEventListener('focusout', () => setTimeout(() => scrollTo(0, 0), 50));
-  window.AAIApp = { lock, idleCheck, state: () => data, IDLE_MS, APP_VERSION };
-  if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
+  window.AAIApp = { lock, idleCheck, state: () => data, IDLE_MS, APP_VERSION, CACHE_NAME, reload: () => location.reload() };
+  // A new service worker that finishes installing while the app is open (an older one already controls it) shows the banner.
+  if ('serviceWorker' in navigator) {
+    const sw = navigator.serviceWorker, had = !!sw.controller, ready = () => { $('update').hidden = false; };
+    const watch = (w) => w && w.addEventListener('statechange', () => { if (w.state === 'installed' && sw.controller) ready(); });
+    sw.addEventListener('controllerchange', () => { if (had) ready(); });
+    sw.register('sw.js', { updateViaCache: 'none' }).then((reg) => {
+      if (!reg) return;
+      if (reg.waiting && sw.controller) ready();
+      watch(reg.installing); reg.addEventListener('updatefound', () => watch(reg.installing));
+      document.addEventListener('visibilitychange', () => { if (!document.hidden) reg.update().catch(() => {}); });
+    }).catch(() => {});
+  }
   lock();
 })();
