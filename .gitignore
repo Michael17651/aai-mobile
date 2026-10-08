@@ -1,0 +1,5 @@
+.claude/.last_checkpoint_tokens
+.claude/.last_checkpoint_time
+node_modules/
+*.aaib
+phone-test/

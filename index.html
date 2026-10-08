@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self'; style-src 'self'; script-src 'self'; connect-src 'self'; form-action 'none'">
+<meta name="theme-color" content="#12151a">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="AAI Mobile">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icon-180.png">
+<link rel="icon" href="icon-192.png">
+<link rel="stylesheet" href="styles.css">
+<title>AAI Mobile</title>
+</head>
+<body>
+<header id="head">
+  <span id="bundleAge">No bundle</span>
+  <button id="lockBtn" type="button" hidden>Lock</button>
+</header>
+
+<main id="lockView">
+  <h1>AAI Mobile</h1>
+  <p id="lockHint"></p>
+  <form id="unlockForm" autocomplete="off">
+    <label for="pass">Passphrase</label>
+    <input id="pass" type="password" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false">
+    <button id="unlockBtn" type="submit">Unlock</button>
+  </form>
+  <input id="file" type="file" hidden>
+  <button id="importBtn" type="button" class="secondary">Import a bundle file</button>
+  <p id="lockMsg" role="status"></p>
+</main>
+
+<div id="appView" hidden>
+  <div id="banner" role="status"></div>
+  <section id="tab-prices"></section>
+  <section id="tab-customers" hidden></section>
+  <section id="tab-followups" hidden></section>
+  <nav id="tabs">
+    <button type="button" data-tab="prices" class="on">Prices</button>
+    <button type="button" data-tab="customers">Customers</button>
+    <button type="button" data-tab="followups">Follow-ups</button>
+  </nav>
+</div>
+
+<script src="core.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
