@@ -104,6 +104,10 @@ next session.
 **Resuming work:** start a new Claude Code session in this repo and read
 `resume-note.md` first if it exists.
 
+## Commands
+
+- Rerun the semantic doc pass: in Claude Code, run `/graphify . --update --mode deep`. It re-reads only new or changed docs and images, with an LLM, and keeps the rest of the graph. Run it after significant doc changes (new docs, or heavily edited `.md` files). The git hooks refresh code only and never re-read docs.
+
 ## Working rules
 
 - Before building anything, write success criteria and the tests that prove them.
