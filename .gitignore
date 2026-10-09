@@ -4,3 +4,4 @@ node_modules/
 *.aaib
 *.aaio
 phone-test/
+graphify-out/

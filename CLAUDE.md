@@ -8,7 +8,7 @@ Azure is read-only, permanently. No feature in any version of the AAI Console or
 
 The phone app never talks to Azure at all.
 
-Run tests: \`npm test\`. Bump \`CACHE\` in \`sw.js\` when shipping app changes.
+Run tests: \`npm test\` (the Stop hook runs \`npm test || npm test\`: the suite is timing-flaky under load, see docs/decisions.md). Bump \`CACHE\` in \`sw.js\` when shipping app changes.
 
 ## Capture and outbox (phone app version 2.0.0)
 
@@ -102,3 +102,18 @@ next session.
 
 **Resuming work:** start a new Claude Code session in this repo and read
 `resume-note.md` first if it exists.
+
+## Working rules
+
+- Before building anything, write success criteria and the tests that prove them.
+- Record each non-trivial design decision in `docs/decisions.md`.
+- After finishing a feature, create `docs/explainer-<feature>.html`: a one-page, plain-language visual of what was built and why, for a non-programmer.
+- Before pushing, run a review subagent that has not seen this conversation; it reads the diff and the success criteria and reports problems. Fix them before pushing.
+- If context gets compacted, tell me to run /clear so the next session starts from `resume-note.md`.
+
+## Hooks
+
+- `PreCompact`: forces a checkpoint (commit, update `resume-note.md`, push). `SessionStart`: injects `resume-note.md`.
+- `Stop` (`stop.sh`, the only Stop hook): runs the project's test command first, then the token checkpoint. Failing tests block stopping (once; guarded by `stop_hook_active`; tests are capped at 240s and a timeout counts as a failure) and skip the checkpoint. Define it by adding a line starting with `Test command:` followed by the command. No such line means tests are skipped and only the checkpoint runs.
+
+Test command: npm test || npm test

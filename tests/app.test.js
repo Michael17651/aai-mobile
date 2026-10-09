@@ -298,7 +298,7 @@ test('public-repo safety: no .aaib or .aaio file and no JSON over 100 KB', () =>
   const bad = [];
   (function walk(d) {
     for (const e of fs.readdirSync(d, { withFileTypes: true })) {
-      if (['.git', 'node_modules', 'phone-test'].includes(e.name)) continue;
+      if (['.git', 'node_modules', 'phone-test'].includes(e.name) || (d === ROOT && e.name === 'graphify-out')) continue;
       const p = path.join(d, e.name);
       if (e.isDirectory()) walk(p);
       else if (/\.aaio?$/i.test(e.name) || (/\.json$/i.test(e.name) && fs.statSync(p).size > 100 * 1024)) bad.push(path.relative(ROOT, p));
