@@ -67,7 +67,7 @@ function fixture(over) {
 function boot(idb, pre) {
   const html = read('index.html').replace(/<script[^>]*><\/script>/g, '');
   const dom = new JSDOM(html, { runScripts: 'outside-only', url: 'https://aai.test/aai-mobile/', pretendToBeVisual: true });
-  const w = dom.window;
+  const w = dom.window; pages.push(w);
   Object.defineProperty(w, 'crypto', { value: webcrypto });
   w.TextEncoder = TextEncoder; w.TextDecoder = TextDecoder;
   w.indexedDB = idb || new IDBFactory();
@@ -79,21 +79,49 @@ function boot(idb, pre) {
     async chooseFile(name, text) {
       Object.defineProperty($('file'), 'files', { configurable: true, value: [{ name, text: async () => text }] });
       $('file').dispatchEvent(new w.Event('change'));
-      await tick();
+      await waitFor(() => $('lockHint').textContent.includes('passphrase for ' + name + '.'), 'the lock screen to show the chosen file ' + name);
     },
+    // The first lock-screen refresh (reads IndexedDB) has finished: it always writes a hint.
+    ready: () => waitFor(() => $('lockHint').textContent !== '', 'the lock screen to render'),
     // Waits for the lock screen's work (PBKDF2 etc.) to finish.
-    async settle() { for (let i = 0; i < 200 && (['pinBtn', 'passBtn', 'newPinBtn'].some((id) => $(id).disabled) || /Opening|Saving/.test($('lockMsg').textContent) || i < 2); i++) await tick(30); },
+    async settle() { for (let i = 0; i < 200 && (['pinBtn', 'passBtn', 'newPinBtn'].some((id) => $(id).disabled) || /Opening|Saving/.test($('lockMsg').textContent) || i < 2); i++) await sleep(30); },
     async pin(v) { $('pin').value = v; $('pinForm').dispatchEvent(new w.Event('submit', { cancelable: true })); await this.settle(); },
     async passphrase(v) { $('pass').value = v; $('passForm').dispatchEvent(new w.Event('submit', { cancelable: true })); await this.settle(); },
     async setPin(a, b) { $('pin1').value = a; $('pin2').value = b === undefined ? a : b; $('newPinForm').dispatchEvent(new w.Event('submit', { cancelable: true })); await this.settle(); },
     // Whatever the lock screen asks for: the PIN, or the passphrase then a new PIN (PIN is the shared fake).
     async unlock(pass) {
-      await tick(60); // lock screen refresh reads IndexedDB
-      if (!$('pinForm').hidden) return this.pin(PIN);
+      // A form from before Lock may still be visible, so wait for the screen to stop changing, then require a form.
+      await tick(60);
+      // The choose-a-PIN hint ('Bundle opened...') is what a stale screen shows right after a passphrase import, so it never counts.
+      await waitFor(() => ['pinForm', 'passForm', 'newPinForm'].some((id) => !$(id).hidden) && !/Bundle opened/.test($('lockHint').textContent), 'a lock-screen form');
+      const msg = () => $('lockMsg').textContent, before = msg();
+      const stopped = () => msg() !== '' && msg() !== before && !/Opening|Saving/.test(msg()); // a NEW error is shown
+      const opened = () => !$('appView').hidden;
+      if (!$('pinForm').hidden) { await this.pin(PIN); await waitFor(() => opened() || stopped(), 'the app to open'); return; }
       await this.passphrase(pass);
+      // The PIN form appears only after the lock screen re-reads IndexedDB, which can lag behind the passphrase work.
+      await waitFor(() => !$('newPinForm').hidden || opened() || stopped(), 'the choose-a-PIN step');
       if (!$('newPinForm').hidden) await this.setPin(PIN);
+      await waitFor(() => opened() || stopped(), 'the app to open');
     }
   };
 }
-const tick = (ms) => new Promise((r) => setTimeout(r, ms || 20));
-module.exports = { seal, unseal, fixture, boot, read, ROOT, tick, PIN, rndPin, otherPin };
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+// "Let the app finish what it is doing": sleep the nominal time, then keep waiting until the page text of every
+// booted window has stopped changing for 60 ms (IndexedDB and PBKDF2 work finish later on a loaded machine).
+const pages = [];
+async function tick(ms) {
+  await sleep(ms || 20);
+  const snap = () => pages.slice(-4).map((w) => w.document.body.innerHTML).join('\u0000');
+  let last = snap(), same = 0;
+  for (const t0 = Date.now(); same < 4 && Date.now() - t0 < 2000;) {
+    await sleep(15); const now = snap();
+    if (now === last) same++; else { same = 0; last = now; }
+  }
+}
+// Poll until cond() (may be async) is truthy; fail loudly with what we were waiting for. Replaces fixed sleeps, which flake under CPU load.
+async function waitFor(cond, what, ms = 10000) {
+  const t0 = Date.now();
+  while (!(await cond())) { if (Date.now() - t0 > ms) throw new Error('timed out waiting for ' + what); await tick(10); }
+}
+module.exports = { waitFor, seal, unseal, fixture, boot, read, ROOT, tick, PIN, rndPin, otherPin };

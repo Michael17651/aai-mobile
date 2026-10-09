@@ -1,7 +1,7 @@
 'use strict';
 const test = require('node:test'), assert = require('node:assert/strict');
 const fs = require('fs'), path = require('path');
-const { seal, unseal, fixture, boot, read, ROOT, tick, PIN, rndPin, otherPin } = require('./helpers');
+const { waitFor, seal, unseal, fixture, boot, read, ROOT, tick, PIN, rndPin, otherPin } = require('./helpers');
 const { execFileSync } = require('child_process'), vm = require('vm');
 const core = require('../core.js');
 const { webcrypto } = require('node:crypto');
@@ -52,7 +52,7 @@ test('self-check passes a good bundle and fails bad ones', () => {
   assert.equal(bad((b) => { b.checks = []; }).ok, false);
 });
 test('call-for-price (and a zero price) is never shown as $0', async () => {
-  const t = boot(); await tick();
+  const t = boot(); await t.ready();
   await t.chooseFile('b.aaib', sealed); await t.unlock(PASS);
   const body = t.text();
   assert.match(body, /Prices verified, 4 checks/);
@@ -61,7 +61,7 @@ test('call-for-price (and a zero price) is never shown as $0', async () => {
   assert.equal(core.isCall(fixture().catalog[4]), true);
 });
 test('price screen shows tiers, flags, notes, dates and filters', async () => {
-  const t = boot(); await tick();
+  const t = boot(); await t.ready();
   await t.chooseFile('b.aaib', sealed); await t.unlock(PASS);
   const box = t.$('tab-prices');
   ['$100', '$90', '$80', '10–29', 'Limited stock', 'Must call', 'Price TBD', 'Master Panda test', 'Price list TEST', 'Bundle from'].forEach((s) => assert.ok(box.textContent.includes(s), s));
@@ -74,7 +74,7 @@ test('price screen shows tiers, flags, notes, dates and filters', async () => {
 });
 test('a failed bundle shows the red block and does not open the price screens', async () => {
   const b = fixture(); b.checks[0].expect.unit = 1;
-  const t = boot(); await tick();
+  const t = boot(); await t.ready();
   await t.chooseFile('bad.aaib', await seal(b, PASS)); await t.unlock(PASS);
   assert.match(t.text(), /Price check failed, do not quote from this phone/);
   assert.match(t.text(), /Panda A at 30/);
@@ -88,7 +88,7 @@ const rawPut = (w, key, val) => new Promise((res) => { const r = w.indexedDB.ope
 const setT = (t, ms) => { const base = t.w.Date.now(); t.w.Date.now = () => base + ms; return base; };
 
 test('first import: passphrase, self-check, choose a PIN twice, vault stored with nothing secret in the clear', async () => {
-  const t = boot(); await tick();
+  const t = boot(); await t.ready();
   assert.match(t.$('ver').textContent, /Version 2\.1\.0 · cache aai-mobile-v6/);
   await t.chooseFile('b.aaib', sealed);
   assert.ok(!t.$('passForm').hidden); await t.passphrase('wrong-wrong-wrong');
@@ -115,22 +115,22 @@ test('first import: passphrase, self-check, choose a PIN twice, vault stored wit
   assert.equal(plain.customers.length, 3);
 });
 test('PIN unlock after a cold start; wrong PIN is refused; a failed price check still closes the price screens', async () => {
-  const t = boot(); await tick();
+  const t = boot(); await t.ready();
   await t.chooseFile('b.aaib', sealed); await t.unlock(PASS);
-  const w2 = boot(t.w.indexedDB); await tick(50);
+  const w2 = boot(t.w.indexedDB); await w2.ready();
   assert.equal(w2.w.AAIApp.state(), null); assert.ok(!w2.$('lockView').hidden); assert.ok(!w2.$('pinForm').hidden); assert.ok(w2.$('passForm').hidden);
   assert.match(w2.$('ver').textContent, /aai-mobile-v6/);
   await w2.pin(otherPin(PIN)); assert.match(w2.$('lockMsg').textContent, /Wrong PIN/); assert.equal(w2.w.AAIApp.state(), null);
   setT(w2, 20000); await w2.pin(PIN);
   assert.ok(w2.w.AAIApp.state()); assert.match(w2.text(), /Prices verified/);
   const b = fixture(); b.checks[0].expect.unit = 1;
-  const t3 = boot(); await tick(); await t3.chooseFile('b', await seal(b, PASS)); await t3.unlock(PASS);
-  const w4 = boot(t3.w.indexedDB); await tick(50); await w4.pin(PIN);
+  const t3 = boot(); await t3.ready(); await t3.chooseFile('b', await seal(b, PASS)); await t3.unlock(PASS);
+  const w4 = boot(t3.w.indexedDB); await w4.ready(); await w4.pin(PIN);
   assert.match(w4.text(), /Price check failed/); assert.ok(!w4.$('tab-prices').textContent.includes('$100'));
 });
 test('wrong PINs: waits of 1, 2, 4, 8 s; lockout refuses even the right PIN; counter resets on success', async () => {
-  const t = boot(); await tick(); await t.chooseFile('b', sealed); await t.unlock(PASS);
-  const c = boot(t.w.indexedDB); await tick(50);
+  const t = boot(); await t.ready(); await t.chooseFile('b', sealed); await t.unlock(PASS);
+  const c = boot(t.w.indexedDB); await c.ready();
   let now = c.w.Date.now(); const clock = () => { c.w.Date.now = () => now; }; clock();
   const fails = async () => (await rawKv(c.w)).fails;
   for (const [n, wait] of [[1, 1], [2, 2], [3, 4], [4, 8]]) {
@@ -147,7 +147,7 @@ test('wrong PINs: waits of 1, 2, 4, 8 s; lockout refuses even the right PIN; cou
 test('5th wrong PIN in a row wipes the bundle but keeps the outbox', async () => {
   const t = await unlocked(); await lead(t, 'Kept Lead Co');
   await new Promise((res) => { const r = t.w.indexedDB.open('aai-mobile'); r.onsuccess = () => { const tx = r.result.transaction('kv', 'readwrite'); tx.objectStore('kv').put('PX', 'deviceLabel'); tx.oncomplete = res; }; });
-  const c = boot(t.w.indexedDB); await tick(50);
+  const c = boot(t.w.indexedDB); await c.ready();
   let now = c.w.Date.now();
   for (let i = 0; i < 5; i++) { c.w.Date.now = () => now; await c.pin(otherPin(PIN)); now += 10000; }
   assert.equal(c.w.AAIApp.state(), null);
@@ -156,39 +156,40 @@ test('5th wrong PIN in a row wipes the bundle but keeps the outbox', async () =>
   const recs = await dump(c.w); assert.equal(recs.length, 1); assert.equal(recs[0].company, 'Kept Lead Co');
   assert.ok(c.$('pinForm').hidden && c.$('passForm').hidden); assert.match(c.$('lockHint').textContent, /No bundle yet/);
   // a fresh import works and the surviving outbox record is there
-  await c.chooseFile('b', sealed); await c.unlock(PASS); await tick(80);
+  await c.chooseFile('b', sealed); await c.unlock(PASS);
+  await waitFor(() => /Kept Lead Co/.test(c.$('tab-outbox').textContent), 'the outbox to render'); await tick(10);
   assert.match(c.$('tab-outbox').textContent, /Kept Lead Co/);
 });
 test('Settings: change PIN needs the current PIN; new PIN works, old does not; bundle and outbox passphrase survive', async () => {
   const t = await unlocked(); const S = t.$('tab-settings'), NEW = otherPin(otherPin(PIN));
   await setObpass(t, OPASS);
-  t.$('setBtn').click(); await tick(60);
+  await openSettings(t);
   assert.match(S.textContent, /Version 2\.1\.0 · cache aai-mobile-v6/);
   const fill = (lab, v) => type(t.w, S.querySelector('[aria-label="' + lab + '"]'), v);
-  const go = async () => { click(S, 'Change PIN'); await tick(300); };
-  fill('Current PIN', otherPin(PIN)); fill('New PIN', NEW); fill('New PIN again', NEW); await go();
+  const go = async (re) => { click(S, 'Change PIN'); await waitFor(() => re.test(S.textContent), 'the Change PIN result ' + re); await tick(10); };
+  fill('Current PIN', otherPin(PIN)); fill('New PIN', NEW); fill('New PIN again', NEW); await go(/Wrong PIN/);
   assert.match(S.textContent, /Wrong PIN/);
-  fill('Current PIN', PIN); fill('New PIN', NEW); fill('New PIN again', NEW + '1'); await go(); assert.match(S.textContent, /differ/);
-  fill('Current PIN', PIN); fill('New PIN', '12'); fill('New PIN again', '12'); await go(); assert.match(S.textContent, /4 to 8 digits/);
+  fill('Current PIN', PIN); fill('New PIN', NEW); fill('New PIN again', NEW + '1'); await go(/differ/); assert.match(S.textContent, /differ/);
+  fill('Current PIN', PIN); fill('New PIN', '12'); fill('New PIN again', '12'); await go(/4 to 8 digits/); assert.match(S.textContent, /4 to 8 digits/);
   setT(t, 20000);
-  fill('Current PIN', PIN); fill('New PIN', NEW); fill('New PIN again', NEW); await go(); assert.match(S.textContent, /PIN changed/);
-  const c = boot(t.w.indexedDB); await tick(50);
+  fill('Current PIN', PIN); fill('New PIN', NEW); fill('New PIN again', NEW); await go(/PIN changed/); assert.match(S.textContent, /PIN changed/);
+  const c = boot(t.w.indexedDB); await c.ready();
   setT(c, 40000); await c.pin(PIN); assert.equal(c.w.AAIApp.state(), null, 'old PIN refused');
   setT(c, 80000); await c.pin(NEW); assert.ok(c.w.AAIApp.state());
   assert.equal(await shownPass(c, NEW), OPASS);
 });
 test('Settings: Delete bundle asks first, removes the bundle, keeps the outbox', async () => {
   const t = await unlocked(); await lead(t, 'Kept Lead Co');
-  t.$('setBtn').click(); await tick(60);
+  await openSettings(t);
   click(t.$('tab-settings'), 'Delete bundle'); assert.ok(t.w.AAIApp.state(), 'still there until confirmed'); assert.match(t.$('tab-settings').textContent, /Unsent outbox records stay/);
   click(t.$('tab-settings'), 'Cancel'); assert.ok(t.w.AAIApp.state());
-  click(t.$('tab-settings'), 'Delete bundle'); click(t.$('tab-settings'), 'Yes, delete'); await tick(100);
+  click(t.$('tab-settings'), 'Delete bundle'); click(t.$('tab-settings'), 'Yes, delete'); await waitFor(() => t.w.AAIApp.state() === null && /Bundle deleted/.test(t.$('lockMsg').textContent), 'the bundle to be deleted'); await tick(10);
   assert.equal(t.w.AAIApp.state(), null); assert.deepEqual(Object.keys(await rawKv(t.w)).filter((k) => k !== 'deviceLabel'), []);
   assert.equal((await dump(t.w)).length, 1); assert.match(t.$('lockMsg').textContent, /Bundle deleted/);
 });
 test('migration: a phone with an old-format bundle asks the passphrase once, then walks through choosing a PIN', async () => {
-  const t = boot(); await tick(); await rawPut(t.w, 'bundle', sealed);
-  const m = boot(t.w.indexedDB); await tick(50);
+  const t = boot(); await t.ready(); await rawPut(t.w, 'bundle', sealed);
+  const m = boot(t.w.indexedDB); await m.ready();
   assert.ok(!m.$('passForm').hidden); assert.ok(m.$('pinForm').hidden); assert.match(m.$('lockHint').textContent, /older version/);
   await m.passphrase('wrong-wrong-wrong'); assert.match(m.$('lockMsg').textContent, /Wrong passphrase/);
   await m.passphrase(PASS); assert.ok(!m.$('newPinForm').hidden); assert.equal(m.w.AAIApp.state(), null);
@@ -196,11 +197,11 @@ test('migration: a phone with an old-format bundle asks the passphrase once, the
   await m.setPin(PIN);
   assert.ok(m.w.AAIApp.state()); const kv = await rawKv(m.w);
   assert.deepEqual(Object.keys(kv).sort(), ['fails', 'vault', 'wrap']);
-  const n = boot(m.w.indexedDB); await tick(50); assert.ok(!n.$('pinForm').hidden); assert.ok(n.$('passForm').hidden);
+  const n = boot(m.w.indexedDB); await n.ready(); assert.ok(!n.$('pinForm').hidden); assert.ok(n.$('passForm').hidden);
   await n.pin(PIN); assert.ok(n.w.AAIApp.state());
 });
 test('lock wipes memory and the screen; passphrase is not kept anywhere', async () => {
-  const t = boot(); await tick();
+  const t = boot(); await t.ready();
   await t.chooseFile('b.aaib', sealed); await t.unlock(PASS);
   assert.match(t.text(), /Acme Test|Panda A/);
   t.$('lockBtn').click();
@@ -211,17 +212,17 @@ test('lock wipes memory and the screen; passphrase is not kept anywhere', async 
   assert.equal(t.w.localStorage.length + t.w.sessionStorage.length, 0);
 });
 test('idle for 5 minutes locks the app', async () => {
-  const t = boot(); await tick();
+  const t = boot(); await t.ready();
   await t.chooseFile('b.aaib', sealed); await t.unlock(PASS);
   const real = t.w.Date.now, start = real();
   t.w.Date.now = () => start + 4 * 60 * 1000; t.w.AAIApp.idleCheck();
   assert.ok(t.w.AAIApp.state(), 'still unlocked at 4 min');
   t.w.Date.now = () => start + 5 * 60 * 1000 + 1000; t.w.AAIApp.idleCheck();
   assert.equal(t.w.AAIApp.state(), null);
-  await tick(50); assert.ok(!t.$('lockView').hidden); assert.ok(!t.$('pinForm').hidden, 'back at the PIN screen'); assert.ok(t.$('passForm').hidden);
+  await waitFor(() => !t.$('lockView').hidden && !t.$('pinForm').hidden, 'the PIN screen'); assert.ok(!t.$('lockView').hidden); assert.ok(!t.$('pinForm').hidden, 'back at the PIN screen'); assert.ok(t.$('passForm').hidden);
 });
 test('header shows bundle age: neutral, amber after 7 days, red after 30', async () => {
-  const day = 864e5, age = async (d) => { const t = boot(); await tick(); await t.chooseFile('b', await seal(fixture({ createdAt: new Date(Date.now() - d * day).toISOString() }), PASS)); await t.unlock(PASS); return t.$('bundleAge'); };
+  const day = 864e5, age = async (d) => { const t = boot(); await t.ready(); await t.chooseFile('b', await seal(fixture({ createdAt: new Date(Date.now() - d * day).toISOString() }), PASS)); await t.unlock(PASS); return t.$('bundleAge'); };
   const a = await age(1), b = await age(8), c = await age(31);
   assert.match(a.textContent, /^Bundle from /); assert.equal(a.className, '');
   assert.equal(b.className, 'amber'); assert.equal(c.className, 'red');
@@ -242,7 +243,7 @@ test('search: fields and phone-digit rules', () => {
   assert.equal(n('').length, 0);
 });
 test('customer rows and detail: twins separate, tel/sms/mailto/maps, invoices', async () => {
-  const t = boot(); await tick();
+  const t = boot(); await t.ready();
   await t.chooseFile('b', sealed); await t.unlock(PASS);
   const box = t.$('tab-customers'), q = box.querySelector('input');
   q.value = 'twin'; q.dispatchEvent(new t.w.Event('input'));
@@ -257,7 +258,7 @@ test('customer rows and detail: twins separate, tel/sms/mailto/maps, invoices', 
 });
 test('Maps link is Google Maps, URL-encodes commas, apostrophes and # units', async () => {
   const b = fixture(); b.customers[0].address = "5 O'Brien Ave #12"; b.customers[0].name = 'Quote Co';
-  const t = boot(); await tick();
+  const t = boot(); await t.ready();
   await t.chooseFile('b', await seal(b, PASS)); await t.unlock(PASS);
   const box = t.$('tab-customers'), q = box.querySelector('input');
   q.value = 'quote'; q.dispatchEvent(new t.w.Event('input'));
@@ -270,7 +271,7 @@ test('Maps link is Google Maps, URL-encodes commas, apostrophes and # units', as
 test('follow-ups sort by due date, highlight overdue and soon, tap to call', async () => {
   const soon = new Date(); soon.setDate(soon.getDate() + 2);
   const b = fixture(); b.followUps[2].due = core.dayStr(soon);
-  const t = boot(); await tick();
+  const t = boot(); await t.ready();
   await t.chooseFile('b', await seal(b, PASS)); await t.unlock(PASS);
   const cards = [...t.$('tab-followups').querySelectorAll('.card')];
   assert.deepEqual(cards.map((c) => c.querySelector('h3').textContent), ['Overdue Co', 'Today Co', 'Later Co']);
@@ -312,12 +313,25 @@ test('public-repo safety: no .aaib or .aaio file and no JSON over 100 KB', () =>
 const OPASS = 'outbox-pass-1';
 const click = (root, txt) => { const b = [...root.querySelectorAll('button, a')].find((x) => x.textContent.trim().startsWith(txt)); assert.ok(b, 'no button ' + txt); b.click(); return b; };
 const type = (w, el, v) => { el.value = v; el.dispatchEvent(new w.Event('input', { bubbles: true })); el.dispatchEvent(new w.Event('change', { bubbles: true })); };
-const unlocked = async (b) => { const t = boot(); await tick(); await t.chooseFile('b', await seal(b || fixture(), PASS)); await t.unlock(PASS); return t; };
+const unlocked = async (b) => { const t = boot(); await t.ready(); await t.chooseFile('b', await seal(b || fixture(), PASS)); await t.unlock(PASS); return t; };
 const dump = (w) => new Promise((res) => { const r = w.indexedDB.open('aai-mobile'); r.onsuccess = () => { const g = r.result.transaction('outbox').objectStore('outbox').getAll(); g.onsuccess = () => res(g.result); }; });
+// Save and wait until the record is really in IndexedDB (the app writes asynchronously).
+const clickSave = async (t, root, n = 1) => {
+  const before = (await dump(t.w)).length;
+  click(root, 'Save to outbox');
+  await waitFor(async () => (await dump(t.w)).length >= before + n, 'the record to be saved');
+  await tick(10);
+};
+// renderSettings() is async and replaces the screen's children, so wait for a NEW first child: typing into the old one would be lost.
+const openSettings = async (t) => {
+  const old = t.$('tab-settings').firstChild;
+  t.$('setBtn').click();
+  await waitFor(() => !t.$('tab-settings').hidden && t.$('tab-settings').firstChild && t.$('tab-settings').firstChild !== old && t.$('tab-settings').textContent.includes('Outbox passphrase'), 'Settings to render');
+};
 const lead = async (t, company, temp) => {
   click(t.$('tab-new'), 'New customer or lead');
   const f = t.$('tab-new'); type(t.w, f.querySelector('[aria-label=Company]'), company); type(t.w, f.querySelector('[aria-label="Met at (show or site)"]'), 'Test Show');
-  f.querySelector('select').value = temp || 'hot'; click(f, 'Save to outbox'); await tick(60);
+  f.querySelector('select').value = temp || 'hot'; await clickSave(t, f);
 };
 async function quote(t, lines, custSearch) {
   click(t.$('tab-new'), 'Quote request or order');
@@ -351,7 +365,7 @@ test('quote pricing matches the Price check cases (core and screen)', async () =
 test('a lone call-for-price line totals "Call for price", never $0', async () => {
   const t = await unlocked(); const f = await quote(t, [['Printer X', 2]]);
   assert.match(f.textContent, /Total: Call for price/); assert.ok(!hasMoneyZero(f.textContent));
-  click(f, 'Save to outbox'); await tick(60);
+  await clickSave(t, f);
   const [r] = await dump(t.w);
   assert.equal(r.total, null); assert.equal(r.lines[0].unitPrice, null); assert.equal(r.lines[0].lineTotal, null); assert.equal(r.lines[0].callForPrice, true);
 });
@@ -363,11 +377,12 @@ test('outbox: save, edit, delete; ids, createdAt, app version; badge', async () 
   assert.deepEqual([r.kind, r.company, r.metAt, r.temp, r.exportedAt], ['lead', 'Show Lead Co', 'Test Show', 'hot', null]);
   assert.equal(t.$('badge').textContent, '1'); assert.match(t.$('tab-outbox').textContent, /Lead: Show Lead Co/);
   click(t.$('tab-outbox'), 'Edit');
-  type(t.w, t.$('tab-new').querySelector('[aria-label=Company]'), 'Renamed Co'); click(t.$('tab-new'), 'Save to outbox'); await tick(60);
+  type(t.w, t.$('tab-new').querySelector('[aria-label=Company]'), 'Renamed Co'); click(t.$('tab-new'), 'Save to outbox');
+  await waitFor(async () => ((await dump(t.w))[0] || {}).company === 'Renamed Co', 'the edit to be saved'); await tick(10);
   const all = await dump(t.w); assert.equal(all.length, 1);
   assert.equal(all[0].company, 'Renamed Co'); assert.equal(all[0].id, r.id); assert.equal(all[0].createdAt, r.createdAt); assert.ok(all[0].updatedAt);
   const del = click(t.$('tab-outbox'), 'Delete'); assert.equal((await dump(t.w)).length, 1, 'first tap only arms');
-  del.click(); await tick(60);
+  del.click(); await waitFor(async () => (await dump(t.w)).length === 0, 'the record to be deleted'); await tick(10);
   assert.equal((await dump(t.w)).length, 0); assert.equal(t.$('badge').hidden, true);
 });
 test('follow-up attaches to a customer or to a lead entered on the phone', async () => {
@@ -375,7 +390,7 @@ test('follow-up attaches to a customer or to a lead entered on the phone', async
   for (const [q, type_] of [['show lead', 'lead'], ['acme', 'customer']]) {
     click(t.$('tab-new'), 'Follow-up note'); const f = t.$('tab-new');
     type(t.w, f.querySelector('[aria-label="Search customers and leads"]'), q); f.querySelector('button.row').click();
-    type(t.w, f.querySelector('[aria-label=Note]'), 'call back'); type(t.w, f.querySelector('[aria-label="Due date"]'), '2026-11-01'); click(f, 'Save to outbox'); await tick(60);
+    type(t.w, f.querySelector('[aria-label=Note]'), 'call back'); type(t.w, f.querySelector('[aria-label="Due date"]'), '2026-11-01'); await clickSave(t, f);
   }
   const fu = (await dump(t.w)).filter((r) => r.kind === 'followup');
   assert.deepEqual(fu.map((r) => r.target.type).sort(), ['customer', 'lead']);
@@ -385,14 +400,14 @@ test('follow-up attaches to a customer or to a lead entered on the phone', async
 
 // Sets the outbox passphrase from Settings (typed twice).
 async function setObpass(t, pass) {
-  t.$('setBtn').click(); await tick(60);
+  await openSettings(t);
   const S = t.$('tab-settings'); type(t.w, S.querySelector('[aria-label="Outbox passphrase"]'), pass); type(t.w, S.querySelector('[aria-label="Outbox passphrase again"]'), pass);
-  click(S, 'Set outbox passphrase'); await tick(150); t.$('tab-outbox').hidden = true;
+  click(S, 'Set outbox passphrase'); await waitFor(async () => (await rawKv(t.w)).obpass, 'the outbox passphrase to be stored'); await tick(10); t.$('tab-outbox').hidden = true;
 }
 // Settings -> PIN -> Show. Returns the passphrase text shown (or the error).
 async function shownPass(t, pin) {
-  t.$('setBtn').click(); await tick(60);
-  const S = t.$('tab-settings'); type(t.w, S.querySelector('[aria-label="PIN to show the outbox passphrase"]'), pin); click(S, 'Show'); await tick(300);
+  await openSettings(t);
+  const S = t.$('tab-settings'); type(t.w, S.querySelector('[aria-label="PIN to show the outbox passphrase"]'), pin); click(S, 'Show'); await waitFor(() => S.querySelector('.card b') || /Wrong PIN/.test(S.textContent), 'the passphrase or a Wrong PIN message'); await tick(10);
   const b = S.querySelector('.card b'); return b ? b.textContent : S.textContent;
 }
 // Drives Export. With a saved outbox passphrase there is nothing to type; otherwise types it twice. Returns what share() was given.
@@ -402,23 +417,25 @@ async function exportFlow(t, { share, pass, ask } = {}) {
   Object.defineProperty(t.w.navigator, 'share', { configurable: true, value: share ? async (d) => { shared.push(d); if (share === 'abort') { const e = new Error('x'); e.name = 'AbortError'; throw e; } } : undefined });
   t.w.URL.createObjectURL = () => 'blob:test'; t.w.URL.revokeObjectURL = () => {};
   t.$('tab-outbox').hidden = false;
-  const box = t.$('tab-outbox'); click(box, 'Export');
+  const box = t.$('tab-outbox');
+  await waitFor(() => [...box.querySelectorAll('button, a')].some((x) => x.textContent.trim().startsWith('Export')), 'the Export button');
+  click(box, 'Export');
   if (ask) {
-    await tick(60); assert.equal(box.querySelectorAll('input[type=password]').length, 2, 'asks for the outbox passphrase');
+    await waitFor(() => box.querySelectorAll('input[type=password]').length === 2, 'the two passphrase fields');
     const [a, b] = box.querySelectorAll('input[type=password]'); a.value = pass || OPASS; b.value = pass || OPASS; click(box, 'Create file');
   } else assert.ok(!box.querySelector('input[type=password]'), 'no typing once the outbox passphrase is saved');
-  for (let i = 0; i < 100 && !/File ready/.test(box.textContent); i++) await tick(30);
+  await waitFor(() => /File ready/.test(box.textContent), 'the export file to be ready');
   return shared;
 }
 const readFile = (w, f) => new Promise((res) => { const r = new w.FileReader(); r.onload = () => res(r.result); r.readAsText(f); });
 
 test('export round trip: first export asks once, then reuses; file decrypts on the console path; marks only after share', async () => {
   const t = await unlocked(); await lead(t, 'Show Lead Co');
-  await quote(t, [['Panda A', 6], ['Panda B', 4]]); click(t.$('tab-new'), 'Save to outbox'); await tick(60);
+  await quote(t, [['Panda A', 6], ['Panda B', 4]]); await clickSave(t, t.$('tab-new'));
   const shared = await exportFlow(t, { share: true, ask: true });
   assert.match(t.$('tab-outbox').textContent, /aai-outbox-\d{4}-\d\d-\d\d-\d{4}\.aaio/);
   assert.equal((await dump(t.w)).filter((r) => r.exportedAt).length, 0, 'not marked before sharing');
-  click(t.$('tab-outbox'), 'Share'); await tick(80);
+  click(t.$('tab-outbox'), 'Share'); await waitFor(() => shared.length === 1, 'share() to be called');
   assert.equal(shared.length, 1);
   const text = await readFile(t.w, shared[0].files[0]);
   assert.deepEqual(Object.keys(JSON.parse(text)).sort(), ['ct', 'iv', 'salt', 'v']); assert.ok(!text.includes('Show Lead'));
@@ -428,40 +445,42 @@ test('export round trip: first export asks once, then reuses; file decrypts on t
   const q = o.records.find((r) => r.kind === 'quote');
   assert.deepEqual([q.total, q.priceListDate, q.lines[0].name, q.lines[0].qty, q.lines[0].unitPrice, q.lines[0].lineTotal, q.lines[0].priceListDate], [810, 'Price list TEST', 'Panda A', 6, 90, 540, 'Price list TEST']);
   assert.ok(o.records.every((r) => !('exportedAt' in r) && r.id && r.createdAt && r.appVersion));
+  await waitFor(async () => (await dump(t.w)).filter((r) => r.exportedAt).length === 2, 'records to be marked exported'); await tick(10);
   assert.equal((await dump(t.w)).filter((r) => r.exportedAt).length, 2, 'marked after share completed');
   assert.equal(t.$('badge').hidden, true); assert.match(t.$('tab-outbox').textContent, /Exported, kept 30 days/);
   // second export, even after a lock and a PIN unlock: no typing, same passphrase
-  await lead(t, 'Second Co'); t.$('lockBtn').click(); await t.unlock(PASS); await tick(80);
-  const again = await exportFlow(t, { share: true }); click(t.$('tab-outbox'), 'Share'); await tick(80);
+  await lead(t, 'Second Co'); t.$('lockBtn').click(); await t.unlock(PASS);
+  const again = await exportFlow(t, { share: true }); click(t.$('tab-outbox'), 'Share'); await waitFor(() => again.length === 1, 'share() to be called');
   const o2 = await unseal(await readFile(t.w, again[0].files[0]), OPASS);
   assert.deepEqual(o2.records.map((r) => r.company), ['Second Co']);
   const stored = JSON.stringify(await rawKv(t.w)); assert.ok(!stored.includes(OPASS), 'outbox passphrase is not stored in the clear');
 });
 test('outbox passphrase from Settings: 8+ chars twice; shown only after the PIN; used by export', async () => {
   const t = await unlocked(); await lead(t, 'Show Lead Co');
-  t.$('setBtn').click(); await tick(60);
+  await openSettings(t);
   const S = t.$('tab-settings'), fill = (l, v) => type(t.w, S.querySelector('[aria-label="' + l + '"]'), v);
-  fill('Outbox passphrase', 'short'); fill('Outbox passphrase again', 'short'); click(S, 'Set outbox passphrase'); await tick(100); assert.match(S.textContent, /8 or more/);
-  fill('Outbox passphrase', OPASS); fill('Outbox passphrase again', OPASS + 'x'); click(S, 'Set outbox passphrase'); await tick(100); assert.match(S.textContent, /differ/);
-  t.$('setBtn').click(); await tick(60); assert.ok(![...t.$('tab-settings').querySelectorAll('button')].some((b) => b.textContent === 'Show'), 'no Show button before it is set');
+  fill('Outbox passphrase', 'short'); fill('Outbox passphrase again', 'short'); click(S, 'Set outbox passphrase'); await waitFor(() => /8 or more/.test(S.textContent), 'the too-short message'); assert.match(S.textContent, /8 or more/);
+  fill('Outbox passphrase', OPASS); fill('Outbox passphrase again', OPASS + 'x'); click(S, 'Set outbox passphrase'); await waitFor(() => /differ/.test(S.textContent), 'the passphrases-differ message'); assert.match(S.textContent, /differ/);
+  await openSettings(t); assert.ok(![...t.$('tab-settings').querySelectorAll('button')].some((b) => b.textContent === 'Show'), 'no Show button before it is set');
   assert.ok(!(await rawKv(t.w)).obpass);
   await setObpass(t, OPASS); assert.ok((await rawKv(t.w)).obpass);
   assert.notEqual(await shownPass(t, otherPin(PIN)), OPASS); assert.match(t.$('tab-settings').textContent, /Wrong PIN/);
   setT(t, 20000); assert.equal(await shownPass(t, PIN), OPASS);
-  const shared = await exportFlow(t, { share: true }); click(t.$('tab-outbox'), 'Share'); await tick(80);
+  const shared = await exportFlow(t, { share: true }); click(t.$('tab-outbox'), 'Share'); await waitFor(() => shared.length === 1, 'share() to be called');
   assert.deepEqual((await unseal(await readFile(t.w, shared[0].files[0]), OPASS)).records.map((r) => r.company), ['Show Lead Co']);
   t.$('lockBtn').click(); assert.ok(!/outbox-pass|Outbox passphrase/.test(t.$('tab-settings').textContent), 'cleared on lock');
 });
 test('wrong passphrase on the exported file fails; tampering fails', async () => {
   const t = await unlocked(); await lead(t, 'Show Lead Co'); await setObpass(t, OPASS);
-  const shared = await exportFlow(t, { share: true }); click(t.$('tab-outbox'), 'Share'); await tick(80);
+  const shared = await exportFlow(t, { share: true }); click(t.$('tab-outbox'), 'Share'); await waitFor(() => shared.length === 1, 'share() to be called');
   const text = await readFile(t.w, shared[0].files[0]);
   await assert.rejects(core.openOutbox(text, 'wrong-wrong-wrong', webcrypto.subtle), /Wrong passphrase/);
   await assert.rejects(core.openOutbox(await seal(fixture(), PASS), OPASS, webcrypto.subtle), /not a version 1 outbox|Wrong passphrase/);
 });
 test('export marks nothing when share is cancelled; "I sent it" marks; mismatched first-export passphrases are refused', async () => {
   const t = await unlocked(); await lead(t, 'Show Lead Co'); await setObpass(t, OPASS);
-  await exportFlow(t, { share: 'abort' }); click(t.$('tab-outbox'), 'Share'); await tick(80);
+  await exportFlow(t, { share: 'abort' }); click(t.$('tab-outbox'), 'Share');
+  await waitFor(() => /Nothing is marked as sent/.test(t.$('tab-outbox').textContent), 'the cancelled-share message'); await tick(10);
   assert.match(t.$('tab-outbox').textContent, /Nothing is marked as sent/);
   assert.equal((await dump(t.w)).filter((r) => r.exportedAt).length, 0);
   click(t.$('tab-outbox'), 'Cancel'); assert.equal((await dump(t.w))[0].exportedAt, null);
@@ -469,25 +488,27 @@ test('export marks nothing when share is cancelled; "I sent it" marks; mismatche
   await exportFlow(t, {}); assert.ok(t.$('tab-outbox').querySelector('a[download]'));
   assert.equal(t.$('tab-outbox').querySelector('a[download]').getAttribute('download').endsWith('.aaio'), true);
   assert.equal((await dump(t.w))[0].exportedAt, null);
-  click(t.$('tab-outbox'), 'I sent it'); await tick(80);
+  click(t.$('tab-outbox'), 'I sent it'); await waitFor(async () => (await dump(t.w))[0].exportedAt, 'the record to be marked sent'); await tick(10);
   assert.ok((await dump(t.w))[0].exportedAt);
   // a phone with no saved outbox passphrase: mismatched or short entries are refused
-  const u = await unlocked(); await lead(u, 'Second Co'); const box = u.$('tab-outbox'); click(box, 'Export'); await tick(60);
+  const u = await unlocked(); await lead(u, 'Second Co'); const box = u.$('tab-outbox'); click(box, 'Export'); await waitFor(() => box.querySelectorAll('input[type=password]').length === 2, 'the two passphrase fields');
   const [a, b] = box.querySelectorAll('input[type=password]'); a.value = OPASS; b.value = OPASS + 'x'; click(box, 'Create file');
   assert.match(box.textContent, /differ/); assert.ok(!/File ready/.test(box.textContent)); assert.ok(!(await rawKv(u.w)).obpass);
   a.value = 'short'; b.value = 'short'; click(box, 'Create file'); assert.match(box.textContent, /8 or more/);
 });
 test('exported records are kept 30 days for re-export, then purged', async () => {
   const t = await unlocked(); await lead(t, 'Show Lead Co'); await setObpass(t, OPASS);
-  await exportFlow(t, {}); click(t.$('tab-outbox'), 'I sent it'); await tick(80);
+  await exportFlow(t, {}); click(t.$('tab-outbox'), 'I sent it'); await waitFor(async () => (await dump(t.w))[0].exportedAt, 'the record to be marked sent'); await tick(10);
   const [r] = await dump(t.w);
   const real = t.w.Date.now, nowMs = real();
-  t.w.Date.now = () => nowMs + 29 * 864e5; t.$('lockBtn').click(); await t.unlock(PASS); await tick(80);
+  t.w.Date.now = () => nowMs + 29 * 864e5; t.$('lockBtn').click(); await t.unlock(PASS);
+  await waitFor(() => /Re-export these 1/.test(t.$('tab-outbox').textContent), 'the outbox to list the exported record'); await tick(10);
   assert.match(t.$('tab-outbox').textContent, /Show Lead Co/); assert.match(t.$('tab-outbox').textContent, /Re-export these 1/);
   // purge compares against the real clock inside the app, so age the stored record instead
   r.exportedAt = new Date(Date.now() - 31 * 864e5).toISOString();
   await new Promise((res) => { const q = t.w.indexedDB.open('aai-mobile'); q.onsuccess = () => { const tx = q.result.transaction('outbox', 'readwrite'); tx.objectStore('outbox').put(r); tx.oncomplete = res; }; });
-  t.$('lockBtn').click(); await t.unlock(PASS); await tick(80);
+  t.$('lockBtn').click(); await t.unlock(PASS);
+  await waitFor(async () => (await dump(t.w)).length === 0, 'the purge'); await tick(10);
   assert.equal((await dump(t.w)).length, 0); assert.ok(!/Show Lead Co/.test(t.$('tab-outbox').textContent));
 });
 test('lock empties the capture and outbox screens; idle lock still applies', async () => {
@@ -587,7 +608,7 @@ test('service worker fetches every shell file uncached (cache: reload) on instal
   for (const hit of [null, { cached: true }]) {   // with or without a cached copy, the background refresh is uncached
     const w = loadSw(hit); let resp;
     w.handlers.fetch({ request: new w.Request('app.js'), respondWith: (x) => { resp = x; } }); await resp;
-    await tick(10); assert.equal(w.log.fetched.length, 1); assert.equal(w.log.fetched[0].cache, 'reload');
+    await waitFor(() => w.log.fetched.length === 1, 'the background refresh'); assert.equal(w.log.fetched.length, 1); assert.equal(w.log.fetched[0].cache, 'reload');
   }
 });
 test('update banner: shows when a new worker finishes installing under an old one, reloads on tap, survives Lock, not on first install', async () => {
@@ -596,13 +617,13 @@ test('update banner: shows when a new worker finishes installing under an old on
     const reg = { installing: null, waiting: null, addEventListener: (n, f) => { l[n] = f; }, update: async () => {} };
     return { l, wl, worker, reg, sw: { controller, register: async () => reg, addEventListener() {} } };
   };
-  const m = mk({}), t = boot(undefined, (w) => Object.defineProperty(w.navigator, 'serviceWorker', { value: m.sw, configurable: true })); await tick(30);
+  const m = mk({}), t = boot(undefined, (w) => Object.defineProperty(w.navigator, 'serviceWorker', { value: m.sw, configurable: true })); await waitFor(() => m.l.updatefound, 'the app to listen for worker updates');
   assert.equal(t.$('update').hidden, true); assert.equal(t.$('update').textContent, 'Update ready, tap to reload');
   m.reg.installing = m.worker; m.l.updatefound(); m.wl.statechange(); assert.equal(t.$('update').hidden, true, 'still installing');
   m.worker.state = 'installed'; m.wl.statechange(); assert.equal(t.$('update').hidden, false);
   t.$('lockBtn').click(); assert.equal(t.$('update').hidden, false, 'Lock does not hide it');
   let reloaded = 0; t.w.AAIApp.reload = () => { reloaded++; }; t.$('update').click(); assert.equal(reloaded, 1);
-  const f = mk(null), t2 = boot(undefined, (w) => Object.defineProperty(w.navigator, 'serviceWorker', { value: f.sw, configurable: true })); await tick(30);
+  const f = mk(null), t2 = boot(undefined, (w) => Object.defineProperty(w.navigator, 'serviceWorker', { value: f.sw, configurable: true })); await waitFor(() => f.l.updatefound, 'the app to listen for worker updates');
   f.reg.installing = f.worker; f.l.updatefound(); f.worker.state = 'installed'; f.wl.statechange();
   assert.equal(t2.$('update').hidden, true, 'first install has no older worker, so no banner');
 });

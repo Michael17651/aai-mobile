@@ -8,7 +8,7 @@ Azure is read-only, permanently. No feature in any version of the AAI Console or
 
 The phone app never talks to Azure at all.
 
-Run tests: \`npm test\` (the Stop hook runs \`npm test || npm test\`: the suite is timing-flaky under load, see docs/decisions.md). Bump \`CACHE\` in \`sw.js\` when shipping app changes.
+Run tests: \`npm test\` (also the Stop hook's test command). Tests wait on the real completion condition with \`waitFor\` (tests/helpers.js); do not add fixed sleeps, and use \`tick(10)\` only to let a render settle after a positive wait. Bump \`CACHE\` in \`sw.js\` when shipping app changes.
 
 ## Capture and outbox (phone app version 2.0.0)
 
@@ -96,7 +96,8 @@ still an approximation — just a token-based one instead of a wall-clock one.
 
 **Instruction for Claude:** after any auto-handoff commit (a commit message
 starting with `Auto-handoff:`), run `git push` immediately if it hasn't
-already gone out — the hook attempts a best-effort push itself, but treat an
+already gone out — the hook pulls --rebase and pushes itself and records any failure in
+`.claude/.last_checkpoint_sync_problem`, but treat an
 unpushed auto-handoff commit as unfinished business at the start of your
 next session.
 
@@ -108,12 +109,12 @@ next session.
 - Before building anything, write success criteria and the tests that prove them.
 - Record each non-trivial design decision in `docs/decisions.md`.
 - After finishing a feature, create `docs/explainer-<feature>.html`: a one-page, plain-language visual of what was built and why, for a non-programmer.
-- Before pushing, run a review subagent that has not seen this conversation; it reads the diff and the success criteria and reports problems. Fix them before pushing.
+- Before pushing a finished feature or milestone, run a review subagent that has not seen this conversation; it reads the diff and the success criteria and reports problems. Fix them before pushing. Checkpoint pushes are backups and need no review.
 - If context gets compacted, tell me to run /clear so the next session starts from `resume-note.md`.
 
 ## Hooks
 
-- `PreCompact`: forces a checkpoint (commit, update `resume-note.md`, push). `SessionStart`: injects `resume-note.md`.
+- `PreCompact`: forces a checkpoint (commit, update `resume-note.md`, `git pull --rebase`, push). Files over 50 MB are never committed, and a checkpoint that would add over 200 MB commits nothing. Any failure (rebase conflict, other pull failure, rejected push, repo mid-rebase) leaves the commits local, forces nothing, and is written to `.claude/.last_checkpoint_sync_problem`; `SessionStart` shows that note, then injects `resume-note.md`.
 - `Stop` (`stop.sh`, the only Stop hook): runs the project's test command first, then the token checkpoint. Failing tests block stopping (once; guarded by `stop_hook_active`; tests are capped at 240s and a timeout counts as a failure) and skip the checkpoint. Define it by adding a line starting with `Test command:` followed by the command. No such line means tests are skipped and only the checkpoint runs.
 
-Test command: npm test || npm test
+Test command: npm test

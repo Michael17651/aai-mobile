@@ -5,3 +5,4 @@ node_modules/
 *.aaio
 phone-test/
 graphify-out/
+.claude/.last_checkpoint_sync_problem
