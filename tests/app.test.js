@@ -94,7 +94,7 @@ test('first import: passphrase, self-check, choose a PIN twice, vault stored wit
   assert.ok(!t.$('passForm').hidden); await t.passphrase('wrong-wrong-wrong');
   assert.match(t.$('lockMsg').textContent, /Wrong passphrase/); assert.equal(t.w.AAIApp.state(), null);
   await t.passphrase(PASS);
-  assert.ok(!t.$('newPinForm').hidden); assert.equal(t.w.AAIApp.state(), null, 'not open until a PIN is chosen');
+  await waitFor(() => !t.$('newPinForm').hidden, 'the choose-a-PIN form'); assert.equal(t.w.AAIApp.state(), null, 'not open until a PIN is chosen');
   assert.deepEqual(Object.keys(await rawKv(t.w)), [], 'nothing stored before the PIN');
   for (const [a, b, re] of [['123', '123', /4 to 8 digits/], ['123456789', '123456789', /4 to 8 digits/], ['12ab', '12ab', /4 to 8 digits/], [PIN, otherPin(PIN), /differ/]]) {
     await t.setPin(a, b); assert.match(t.$('lockMsg').textContent, re); assert.equal(t.w.AAIApp.state(), null);
@@ -192,7 +192,7 @@ test('migration: a phone with an old-format bundle asks the passphrase once, the
   const m = boot(t.w.indexedDB); await m.ready();
   assert.ok(!m.$('passForm').hidden); assert.ok(m.$('pinForm').hidden); assert.match(m.$('lockHint').textContent, /older version/);
   await m.passphrase('wrong-wrong-wrong'); assert.match(m.$('lockMsg').textContent, /Wrong passphrase/);
-  await m.passphrase(PASS); assert.ok(!m.$('newPinForm').hidden); assert.equal(m.w.AAIApp.state(), null);
+  await m.passphrase(PASS); await waitFor(() => !m.$('newPinForm').hidden, 'the choose-a-PIN form'); assert.equal(m.w.AAIApp.state(), null);
   assert.ok((await rawKv(m.w)).bundle, 'old copy kept until the PIN is saved');
   await m.setPin(PIN);
   assert.ok(m.w.AAIApp.state()); const kv = await rawKv(m.w);
