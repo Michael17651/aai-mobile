@@ -1,9 +1,9 @@
 # Resume Notes
 
-Auto-generated 2026-10-15T19:20:23Z — checkpoint triggered by ccusage billable token usage (~1557660 billable tokens, i.e. totalTokens minus cache reads, in the current 5h session block, a new 100000-token increment since the last checkpoint, at least 900s since the previous one).
+Auto-generated 2026-10-15T19:37:06Z — checkpoint triggered by ccusage billable token usage (~1963442 billable tokens, i.e. totalTokens minus cache reads, in the current 5h session block, a new 100000-token increment since the last checkpoint, at least 900s since the previous one).
 
 ## Last commit
-769a79f74592adfe684be84828e98ad8c9dd1018 CLAUDE.md: add command to rerun the graphify semantic doc pass (2026-10-09 19:08:49 -0400)
+5670f48bdbe3cbd186a33d48318944717b8dc8f2 Phase 11: read-only stock view on the Prices tab (v2.2.0, cache v7) (2026-10-15 15:34:11 -0400)
 
 ## Working tree status at checkpoint
  M resume-note.md
