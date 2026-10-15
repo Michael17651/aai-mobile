@@ -89,7 +89,7 @@ const setT = (t, ms) => { const base = t.w.Date.now(); t.w.Date.now = () => base
 
 test('first import: passphrase, self-check, choose a PIN twice, vault stored with nothing secret in the clear', async () => {
   const t = boot(); await t.ready();
-  assert.match(t.$('ver').textContent, /Version 2\.1\.0 · cache aai-mobile-v6/);
+  assert.match(t.$('ver').textContent, /Version 2\.2\.0 · cache aai-mobile-v7/);
   await t.chooseFile('b.aaib', sealed);
   assert.ok(!t.$('passForm').hidden); await t.passphrase('wrong-wrong-wrong');
   assert.match(t.$('lockMsg').textContent, /Wrong passphrase/); assert.equal(t.w.AAIApp.state(), null);
@@ -119,7 +119,7 @@ test('PIN unlock after a cold start; wrong PIN is refused; a failed price check 
   await t.chooseFile('b.aaib', sealed); await t.unlock(PASS);
   const w2 = boot(t.w.indexedDB); await w2.ready();
   assert.equal(w2.w.AAIApp.state(), null); assert.ok(!w2.$('lockView').hidden); assert.ok(!w2.$('pinForm').hidden); assert.ok(w2.$('passForm').hidden);
-  assert.match(w2.$('ver').textContent, /aai-mobile-v6/);
+  assert.match(w2.$('ver').textContent, /aai-mobile-v7/);
   await w2.pin(otherPin(PIN)); assert.match(w2.$('lockMsg').textContent, /Wrong PIN/); assert.equal(w2.w.AAIApp.state(), null);
   setT(w2, 20000); await w2.pin(PIN);
   assert.ok(w2.w.AAIApp.state()); assert.match(w2.text(), /Prices verified/);
@@ -164,7 +164,7 @@ test('Settings: change PIN needs the current PIN; new PIN works, old does not; b
   const t = await unlocked(); const S = t.$('tab-settings'), NEW = otherPin(otherPin(PIN));
   await setObpass(t, OPASS);
   await openSettings(t);
-  assert.match(S.textContent, /Version 2\.1\.0 · cache aai-mobile-v6/);
+  assert.match(S.textContent, /Version 2\.2\.0 · cache aai-mobile-v7/);
   const fill = (lab, v) => type(t.w, S.querySelector('[aria-label="' + lab + '"]'), v);
   const go = async (re) => { click(S, 'Change PIN'); await waitFor(() => re.test(S.textContent), 'the Change PIN result ' + re); await tick(10); };
   fill('Current PIN', otherPin(PIN)); fill('New PIN', NEW); fill('New PIN again', NEW); await go(/Wrong PIN/);
@@ -640,4 +640,102 @@ test('repo safety: no .aaib/.aaio tracked and no PIN-like literal in any tracked
     });
   }
   assert.deepEqual(hits, [], 'PIN-like literal tracked');
+});
+
+/* ---------- Phase 11: read-only stock view ---------- */
+const MADE = '2026-10-13T14:05:00Z', SAVED = '2026-10-13T12:27:00Z';
+const stockFix = (over) => ({
+  made_at: MADE, file_mtime: SAVED, stamps: { current: '10/12/2026', daily: '10/13/2026 9:00AM' },
+  items: [
+    { code: 'PA', name: 'Panda Board A', type: 'pcb', available: 5, on_order: 2, back_order: 0, after_po: 7, reorder: true, placeholder: false, note: 'Ships Friday', off_sheet: false },
+    { code: 'PB', name: 'Panda Board B', type: 'pcb', available: 0, on_order: 0, back_order: 0, after_po: null, reorder: false, placeholder: false, note: '', off_sheet: false },
+    { code: 'PB2', name: 'Panda Board B2', type: 'pcb', available: 3, on_order: 0, back_order: 0, after_po: null, reorder: false, placeholder: false, note: '', off_sheet: false },
+    { code: 'OFFX', name: 'Orphan Cabinet', type: 'Cab', available: null, on_order: null, back_order: null, after_po: null, reorder: false, placeholder: false, note: '', off_sheet: true },
+    { code: 'ZZ', name: 'Loose Part', type: 'Part', available: 4, on_order: 1, back_order: 0, after_po: null, reorder: false, placeholder: true, note: '', off_sheet: false }
+  ],
+  footer: [{ label: 'Old Fan', available: 47, note: '' }, { label: 'Empty Fan', available: 0, note: '' }],
+  links: { 'Panda A': ['PA'], 'Panda B': ['PB', 'pb2'], 'Ocean Test': ['OFFX'], 'Printer X': [] }, ...over
+});
+const stockApp = async (stock, nowIso) => {
+  const b = fixture(); if (stock) b.stock = stock;
+  const t = boot(); await t.ready();
+  const base = Date.parse(nowIso || '2026-10-13T16:05:00Z'), D = t.w.Date;
+  t.w.Date = class extends D { constructor(...a) { a.length ? super(...a) : super(base); } static now() { return base; } };
+  await t.chooseFile('s.aaib', await seal(b, PASS)); await t.unlock(PASS);
+  const box = t.$('tab-prices');
+  t.rows = () => [...box.querySelectorAll('#stockView tbody tr')].map((r) => r.cells[0].textContent);
+  t.set = (q, g) => { const i = box.querySelector('input'), s = box.querySelector('select'); i.value = q; i.dispatchEvent(new t.w.Event('input')); s.value = g; s.dispatchEvent(new t.w.Event('change')); };
+  return t;
+};
+const when = (iso) => { const d = new Date(iso); return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) + ', ' + d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }); };
+test('stock view: as-of line uses the console date format, no warning when the snapshot is fresh', async () => {
+  const t = await stockApp(stockFix());
+  const line = t.$('tab-prices').querySelector('#stockStamps').textContent;
+  assert.equal(line, 'Inventory sheet saved ' + when(SAVED) + ' · snapshot made ' + when(MADE));
+  assert.match(line, /^Inventory sheet saved [A-Z][a-z]{2} \d{1,2}, 2026, \d{1,2}:\d{2} [AP]M · snapshot made [A-Z][a-z]{2} \d{1,2}, 2026, \d{1,2}:\d{2} [AP]M$/);
+  assert.equal(t.$('tab-prices').querySelector('#stockWarn'), null);
+});
+test('stock view: warning when the snapshot is older than one day (fake clock), not at 23 hours', async () => {
+  const old = await stockApp(stockFix(), '2026-10-14T14:06:00Z');
+  const w = old.$('tab-prices').querySelector('#stockWarn');
+  assert.ok(w, 'warning shown');
+  assert.equal(w.textContent, 'Stock is from Oct 13, 2026. Re-export from the console for current numbers.');
+  const fresh = await stockApp(stockFix(), '2026-10-14T13:00:00Z');
+  assert.equal(fresh.$('tab-prices').querySelector('#stockWarn'), null);
+});
+test('stock view: same grouping and zero rule as the console panel', async () => {
+  const t = await stockApp(stockFix());
+  assert.deepEqual(t.rows().filter((x) => !/Listed below/.test(x)), ['Panda Board APA', 'Panda Board B2PB2', 'Loose PartZZ', 'Old Fan'], 'All, no search: zero rows hidden');
+  assert.match(t.$('tab-prices').querySelector('#stockView').textContent, /Listed below the total on the sheet/);
+  assert.doesNotMatch(t.$('tab-prices').querySelector('#stockView').textContent, /Empty Fan/);
+  const row = t.$('tab-prices').querySelector('#stockView tbody tr');
+  assert.deepEqual([...row.cells].slice(1, 5).map((c) => c.textContent), ['5', '2', '0', '7']);
+  assert.match(row.cells[5].textContent, /Reorder needed/); assert.match(row.cells[5].textContent, /Ships Friday/);
+  t.set('', 'Boards');
+  assert.deepEqual(t.rows(), ['Panda Board APA', 'Panda Board BPB', 'Panda Board B2PB2'], 'section shows its linked rows, zero included, case-insensitive codes');
+  t.set('', 'Parts');
+  assert.deepEqual(t.rows(), []); assert.match(t.$('tab-prices').querySelector('#stockView').textContent, /Printer X: No stock code linked yet/);
+  t.set('panda', '');
+  assert.deepEqual(t.rows(), ['Panda Board APA', 'Panda Board BPB', 'Panda Board B2PB2']);
+});
+test('stock view: a linked code not on the inventory sheet reads "Not on the inventory sheet", no numbers', async () => {
+  const t = await stockApp(stockFix());
+  t.set('', 'Fish');
+  const r = t.$('tab-prices').querySelector('#stockView tbody tr');
+  assert.equal(r.cells[0].textContent, 'Orphan CabinetOFFX'); assert.equal(r.cells.length, 3);
+  assert.equal(r.cells[1].colSpan, 4); assert.equal(r.cells[1].textContent, 'Not on the inventory sheet');
+  assert.ok(!/[0–—]/.test(r.cells[1].textContent));
+});
+test('stock view: a bundle with no stock still opens and says so; lock empties the view', async () => {
+  const t = await stockApp(null);
+  assert.match(t.text(), /Prices verified, 4 checks/);
+  assert.equal(t.$('tab-prices').querySelector('#stockView').textContent.trim(), 'No stock snapshot in this bundle.');
+  const s = await stockApp(stockFix());
+  s.$('lockBtn').click();
+  assert.equal(s.$('tab-prices').textContent, '');
+});
+test('stock view: never shows UnitCost or VendorID even if the data has them; text only', async () => {
+  const st = stockFix(); st.items[0].UnitCost = 12.5; st.items[0].VendorID = 'V-99'; st.items[0].name = '<img src=x onerror=alert(1)>';
+  const t = await stockApp(st);
+  assert.doesNotMatch(t.text(), /UnitCost|VendorID|V-99|12\.5/);
+  assert.equal(t.$('tab-prices').querySelectorAll('#stockView img').length, 0);
+});
+test('stock view: core.stockRows is pure and respects the source files (no network)', () => {
+  assert.equal(typeof core.stockRows, 'function');
+  const src = read('app.js') + read('core.js');
+  assert.ok(!/UnitCost|VendorID/.test(src), 'the phone code never names the forbidden keys');
+});
+test('stock view: no file_mtime says date unknown (never 1970); null footer count is a dash; ungrouped items get an Other group', async () => {
+  const st = stockFix({ file_mtime: null }); st.footer = [{ label: 'Null Fan', available: null, note: '' }];
+  const b = fixture(); b.stock = st; b.catalog.push({ name: 'Loose Thing', tiers: [[1, 5]], note: '', flags: [], group: '', aliases: [], mp: false }); st.links['Loose Thing'] = ['ZZ'];
+  const t = boot(); await t.ready(); await t.chooseFile('o.aaib', await seal(b, PASS)); await t.unlock(PASS);
+  const box = t.$('tab-prices');
+  assert.match(box.querySelector('#stockStamps').textContent, /^Inventory sheet saved date unknown · snapshot made /);
+  assert.doesNotMatch(box.textContent, /1969|1970|null/);
+  const i = box.querySelector('input'), s = box.querySelector('select');
+  assert.ok([...s.options].some((o) => o.value === 'Other'));
+  i.value = 'null'; i.dispatchEvent(new t.w.Event('input'));
+  assert.doesNotMatch(box.querySelector('#stockView').textContent, /null/);
+  i.value = ''; s.value = 'Other'; s.dispatchEvent(new t.w.Event('change'));
+  assert.match(box.querySelector('#stockView').textContent, /Loose Part/);
 });

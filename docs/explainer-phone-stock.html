@@ -1,0 +1,19 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Stock on the phone</title>
+<style>body{font:16px/1.5 -apple-system,system-ui,sans-serif;max-width:720px;margin:24px auto;padding:0 16px;color:#1d2433}h1{font-size:24px}h2{font-size:17px;margin-top:24px}.flow{display:flex;gap:8px;flex-wrap:wrap;align-items:center}.box{border:1px solid #b9c2d3;border-radius:8px;padding:10px 12px;background:#f5f7fb;flex:1;min-width:150px}.arrow{font-size:22px}.warn{border:1px solid #b3261e;background:#fdecea;color:#b3261e;padding:8px 12px;border-radius:8px}small{color:#5b6577}</style></head><body>
+<h1>Stock on the phone</h1>
+<p>You can now look up what is in stock from your iPhone, the same way you do on the console's Price check screen.</p>
+<h2>How the numbers get there</h2>
+<div class="flow"><div class="box"><b>Inventory sheet</b><br><small>on the S: drive, never changed</small></div><span class="arrow">&rarr;</span><div class="box"><b>Console</b><br><small>reads it when you export the phone bundle</small></div><span class="arrow">&rarr;</span><div class="box"><b>Phone bundle</b><br><small>encrypted file, AirDropped</small></div><span class="arrow">&rarr;</span><div class="box"><b>iPhone</b><br><small>Prices tab, Stock section</small></div></div>
+<h2>What you see</h2>
+<ul><li>The same columns as the console: available, on order, back order, after PO, and notes such as "Reorder needed".</li>
+<li>The search box and Group menu on the Prices tab filter stock too. A group shows the stock for the games in it.</li>
+<li>If an item is linked to a stock code that is not on the inventory sheet, it says "Not on the inventory sheet" instead of a made-up zero.</li>
+<li>A line shows when the sheet was saved and when the snapshot was made.</li></ul>
+<h2>When it is old</h2>
+<p class="warn">Stock is from Oct 13, 2026. Re-export from the console for current numbers.</p>
+<p>This appears when the snapshot is more than one day old. Export a new bundle from the console to refresh it.</p>
+<h2>What stays safe</h2>
+<ul><li>Read-only. The phone cannot change stock, and nothing was added that writes to Azure or the inventory sheet.</li>
+<li>Unit cost and vendor are never put in the bundle.</li>
+<li>Older bundles still open. They simply say "No stock snapshot in this bundle."</li></ul>
+</body></html>

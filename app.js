@@ -5,7 +5,7 @@
   'use strict';
   const C = AAICore, $ = (id) => document.getElementById(id);
   const IDLE_MS = 5 * 60 * 1000;
-  const APP_VERSION = '2.1.0', CACHE_NAME = 'aai-mobile-v6' /* must equal CACHE in sw.js (tested) */, KEEP_DAYS = 30, MAX_TRIES = 5, PINRE = /^\d{4,8}$/;
+  const APP_VERSION = '2.2.0', CACHE_NAME = 'aai-mobile-v7' /* must equal CACHE in sw.js (tested) */, KEEP_DAYS = 30, MAX_TRIES = 5, PINRE = /^\d{4,8}$/;
   const WRONG_END = 'Too many wrong PINs. Import the phone bundle again with its passphrase.';
   let data = null, dk = null, staged = null, check = null, pending = null, lastActive = Date.now(), customers = [], selected = null;
   let ob = [], deviceLabel = 'iPhone', xport = null, qtys = new Map();
@@ -138,18 +138,38 @@
   function renderPrices() {
     const box = $('tab-prices');
     if (!check.ok) { put(box, h('p', { class: 'meta' }, 'Price screens are closed until the bundle passes its price check. Re-export it from the console.')); return; }
-    const groups = [...new Set(data.catalog.map((c) => c.group).filter(Boolean))].sort();
+    const groups = [...new Set(data.catalog.map((c) => c.group || 'Other'))].sort();
     const q = h('input', { type: 'search', placeholder: 'Search name, alias or note', 'aria-label': 'Search prices', autocomplete: 'off' });
     const g = h('select', { 'aria-label': 'Group' }, h('option', { value: '' }, 'All groups'), groups.map((x) => h('option', { value: x }, x)));
-    const out = h('div');
+    const out = h('div'), stk = h('div', { id: 'stockView' });
     const draw = () => {
       const list = C.searchCatalog(data.catalog, q.value, g.value);
       put(out, h('p', { class: 'meta' }, list.length + ' items'), list.map(priceCard));
-      calc();
+      calc(); drawStock(stk, q.value, g.value);
     };
     q.oninput = g.onchange = draw;
-    put(box, h('div', { class: 'pin' }, taNote(), h('p', { class: 'meta' }, data.priceListDate + ' · Bundle from ' + dateText(data.createdAt)), q, h('div', { class: 'gap' }, g)), out);
+    put(box, h('div', { class: 'pin' }, taNote(), h('p', { class: 'meta' }, data.priceListDate + ' · Bundle from ' + dateText(data.createdAt)), q, h('div', { class: 'gap' }, g)), out, h('h2', {}, 'Stock'), stk);
     draw();
+  }
+  // Read-only stock snapshot from the bundle, same grouping and wording as the console's Price check stock panel.
+  const dateTime = (iso) => { if (!iso) return ''; const d = new Date(iso); return isNaN(d) ? '' : d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) + ', ' + d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }); };
+  function drawStock(box, q, group) {
+    const s = data.stock;
+    if (!s || !Array.isArray(s.items)) { put(box, h('p', { class: 'meta' }, 'No stock snapshot in this bundle.')); return; }
+    const r = C.stockRows(s, data.catalog, q, group), n = r.rows.length;
+    const old = Date.now() - new Date(s.made_at) > 864e5;
+    const num = (v) => h('td', { class: 'num' }, v == null ? '—' : String(v));
+    const body = r.rows.map((it) => h('tr', {}, h('td', {}, it.name || '', h('span', { class: 'code' }, it.code || '')),
+      it.off_sheet ? h('td', { colspan: '4', class: 'note' }, 'Not on the inventory sheet') : [num(it.available), num(it.on_order), num(it.back_order), num(it.after_po)],
+      h('td', { class: 'note' }, it.reorder ? h('span', { class: 'flag' }, 'Reorder needed') : null, it.placeholder ? h('span', { class: 'flag' }, 'Placeholder') : null, it.note || '')));
+    if (r.foot.length) body.push(h('tr', { class: 'grp' }, h('td', { colspan: '6' }, 'Listed below the total on the sheet')),
+      r.foot.map((f) => h('tr', {}, h('td', {}, f.label), h('td', { class: 'num' }, f.available == null ? '—' : String(f.available)), h('td', { class: 'num' }, '–'), h('td', { class: 'num' }, '–'), h('td', { class: 'num' }, '–'), h('td', {}, f.note || ''))));
+    put(box,
+      h('p', { class: 'meta', id: 'stockStamps' }, 'Inventory sheet saved ' + (dateTime(s.file_mtime) || 'date unknown') + ' · snapshot made ' + (dateTime(s.made_at) || 'date unknown')),
+      old ? h('p', { class: 'banner bad', id: 'stockWarn' }, 'Stock is from ' + dateText(s.made_at) + '. Re-export from the console for current numbers.') : null,
+      h('p', { class: 'meta' }, n + (n === 1 ? ' item' : ' items') + (r.foot.length ? ' + ' + r.foot.length + ' below the total' : '') + (r.hidden ? ' (items at zero are hidden; search or pick a group to see them)' : '')),
+      body.length ? h('table', { class: 'stock' }, h('thead', {}, h('tr', {}, ['Item', 'Available', 'On order', 'Back order', 'After PO', 'Note'].map((x) => h('th', {}, x)))), h('tbody', {}, body)) : null,
+      r.unlinked.map((nm) => h('p', { class: 'meta' }, nm + ': No stock code linked yet')));
   }
   // Whole numbers 1..9999 only: digits are kept, 4 at most, and 0 is empty.
   const cleanQty = (v) => String(v).replace(/\D/g, '').replace(/^0+/, '').slice(0, 4);

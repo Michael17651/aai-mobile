@@ -153,8 +153,29 @@
   }
   function searchCatalog(list, q, group) {
     q = String(q || '').trim().toLowerCase();
-    return list.filter((c) => (!group || c.group === group) &&
+    return list.filter((c) => (!group || (c.group || 'Other') === group) &&
       (!q || q.split(/\s+/).every((t) => [c.name, c.note].concat(c.aliases || []).join(' ').toLowerCase().indexOf(t) > -1)));
+  }
+
+  /* ---------- stock view (read-only, mirrors the console's Price check stock panel) ---------- */
+  // stock: the bundle's `stock`; q and group are the Prices screen's search text and group. Price items in the group link to codes
+  // through stock.links (case-insensitive); a code is "hit" when a linked price item matches the search.
+  function stockRows(stock, catalog, q, group) {
+    q = String(q || '').trim().toLowerCase();
+    const links = stock.links || {}, items = Array.isArray(stock.items) ? stock.items : [], fullFoot = Array.isArray(stock.footer) ? stock.footer : [];
+    const P = catalog.filter((c) => !group || (c.group || 'Other') === group);
+    const codesOf = (c) => (Array.isArray(links[c.name]) ? links[c.name] : []).map((x) => String(x).toLowerCase());
+    const priceHit = (c) => !q || (c.name + ' ' + (c.note || '') + ' ' + (c.group || 'Other')).toLowerCase().indexOf(q) > -1;
+    const linked = new Set(), hit = new Set();
+    P.forEach((c) => codesOf(c).forEach((k) => { linked.add(k); if (q && priceHit(c)) hit.add(k); }));
+    const key = (it) => String(it.code || '').toLowerCase();
+    const own = (it) => (it.name + ' ' + it.code + ' ' + it.type).toLowerCase().indexOf(q) > -1 || hit.has(key(it));
+    const rows = items.filter((it) => group ? linked.has(key(it)) && (!q || own(it))
+      : q ? own(it) : !it.off_sheet && (it.available || it.on_order || it.back_order));
+    const foot = group ? [] : fullFoot.filter((f) => q ? (f.label + ' ' + (f.note || '')).toLowerCase().indexOf(q) > -1 : f.available);
+    const hidden = !group && !q && (rows.length < items.length || foot.length < fullFoot.length);
+    const unlinked = group ? P.filter((c) => !codesOf(c).length && priceHit(c)).map((c) => c.name) : [];
+    return { rows, foot, hidden, unlinked };
   }
 
   /* ---------- misc ---------- */
@@ -169,6 +190,6 @@
 
   const stamp = (d) => dayStr(d) + '-' + String(d.getHours()).padStart(2, '0') + String(d.getMinutes()).padStart(2, '0');
 
-  const api = { open, checkBundle, newVault, wrapKey, unwrap, sealKey, openKey, seal, openOutbox, priceLines, stamp, find, isCall, tierPrice, tierLabels, priceQuote, selfCheck, searchCustomers, searchCatalog, dueClass, ageClass, dayStr, digits };
+  const api = { open, checkBundle, newVault, wrapKey, unwrap, sealKey, openKey, seal, openOutbox, priceLines, stamp, find, isCall, tierPrice, tierLabels, priceQuote, selfCheck, searchCustomers, searchCatalog, stockRows, dueClass, ageClass, dayStr, digits };
   if (typeof module !== 'undefined' && module.exports) module.exports = api; else root.AAICore = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this);

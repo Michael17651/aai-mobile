@@ -1,5 +1,5 @@
 /* Caches the app shell so it opens offline. Same-origin GET only; serves the cached copy and refreshes it in the background. Every network fetch uses cache:'reload' so the GitHub Pages 10 minute HTTP cache cannot serve a stale file. */
-const CACHE = 'aai-mobile-v6';
+const CACHE = 'aai-mobile-v7';
 const SHELL = ['./', 'index.html', 'styles.css', 'core.js', 'app.js', 'manifest.webmanifest', 'icon-180.png', 'icon-192.png', 'icon-512.png'];
 self.addEventListener('install', (e) => { e.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL.map((u) => new Request(u, { cache: 'reload' })))).then(() => self.skipWaiting())); });
 self.addEventListener('activate', (e) => {

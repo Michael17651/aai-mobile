@@ -54,3 +54,8 @@ h2{font-size:18px;margin:8px 0}
 .calc{font-family:var(--mono);font-size:14px;margin-top:6px;min-height:1.4em}
 .hb{display:flex;gap:8px}
 #update{flex:none;width:100%;border-radius:0;border-width:0;padding-top:calc(8px + env(safe-area-inset-top))}
+table.stock{width:100%;border-collapse:collapse;font-size:13px;margin:8px 0}
+table.stock th,table.stock td{padding:6px 4px;border-bottom:1px solid var(--rule);text-align:left;vertical-align:top}
+table.stock .num{text-align:right;font-family:var(--mono)}
+table.stock .code{display:block;color:var(--ink-faint);font:11px var(--mono)}
+table.stock tr.grp td{font-weight:600;color:var(--ink-soft)}

@@ -37,11 +37,15 @@ Public only because free GitHub Pages needs it. The repo is CODE ONLY: no custom
 - **5 wrong PINs in a row delete the stored bundle** (and its outbox passphrase) and show "Too many wrong PINs. Import the phone bundle again with its passphrase." After each wrong PIN you wait 1, 2, 4, then 8 seconds. The count lives in IndexedDB and resets on a correct PIN. Unexported outbox records are not bundle data and are kept.
 - The app locks at every cold start, after 5 minutes idle, and with the Lock button, wiping decrypted data from memory and returning to the PIN screen.
 - **Settings** (top bar): Change PIN (asks for the current PIN), the Outbox passphrase (set; Show after re-entering the PIN), and Delete bundle from this phone (asks first; keeps the outbox).
-- Version and cache name (`Version 2.1.0 · cache aai-mobile-v6`) show on the lock screen and in Settings. When a new version finishes installing while the app is open, an "Update ready, tap to reload" bar appears. The service worker fetches the app files with `cache: 'reload'`, so GitHub Pages' 10 minute cache cannot serve a stale copy.
+- Version and cache name (`Version 2.2.0 · cache aai-mobile-v7`) show on the lock screen and in Settings. When a new version finishes installing while the app is open, an "Update ready, tap to reload" bar appears. The service worker fetches the app files with `cache: 'reload'`, so GitHub Pages' 10 minute cache cannot serve a stale copy.
 
 **Safari storage caveat:** if you use it as a plain Safari tab (not added to the Home Screen), Safari may delete site storage, including the saved bundle, after 7 days without use. The Home Screen app is not subject to that. If the saved bundle is gone, import the file again.
 
 The customer **Maps** button is a plain link to Google Maps (`https://www.google.com/maps/search/?api=1&query=<url-encoded address>`): it opens the Google Maps app if installed, otherwise Google Maps in Safari. It is only opened when tapped; the app itself loads nothing from the network.
+
+## Stock (read-only)
+
+Under the price cards on the **Prices** tab, a Stock section mirrors the console's Price check stock panel from the bundle's `stock` snapshot: item, available, on order, back order, after PO, and notes. The same search box and Group select drive it (a group shows the stock codes its price items link to, zero rows included; All with no search hides zero and off-sheet rows). A linked code that is not on the inventory sheet reads "Not on the inventory sheet". The line "Inventory sheet saved <date-time> · snapshot made <date-time>" says how fresh it is; when the snapshot was made more than a day ago a red bar says "Stock is from <date>. Re-export from the console for current numbers." A bundle without `stock` says "No stock snapshot in this bundle." Nothing here touches the network; Lock empties it. Prices and stock are only as new as the bundle: export again to refresh.
 
 ## Layout, quantity and customer list
 
@@ -59,7 +63,7 @@ The **New** tab captures a lead/new customer (with "met at" and hot/warm/cold), 
 
 ## Bundle format (version 1)
 
-UTF-8 JSON `{v:1, salt, iv, ct}` (base64). AES-GCM 256, key = PBKDF2-SHA256, 600,000 iterations over the UTF-8 passphrase, `ct` has the 16-byte tag appended. Decrypted: `version, createdAt, priceListDate, customers[], catalog[], followUps[], checks[], rules`. Price rules come from `rules`: title add per board for the listed titles, every Nth Master Panda board free at the average billed price, Master Panda quantities pooled for the tier. Items with no tiers, or a non-positive tier price, show "Call for price", never $0. Each catalog item carries `ta` (boolean) from the console export: the Title picker on New quote lines shows only for `ta === true`. A bundle with no `ta` on any item hides the picker everywhere and the Price check and New screens say "Re-export the phone bundle to enable title add".
+UTF-8 JSON `{v:1, salt, iv, ct}` (base64). AES-GCM 256, key = PBKDF2-SHA256, 600,000 iterations over the UTF-8 passphrase, `ct` has the 16-byte tag appended. Decrypted: `version, createdAt, priceListDate, customers[], catalog[], followUps[], checks[], rules`, plus `stock` when the console could read stock (additive; bundles without it open as before). Price rules come from `rules`: title add per board for the listed titles, every Nth Master Panda board free at the average billed price, Master Panda quantities pooled for the tier. Items with no tiers, or a non-positive tier price, show "Call for price", never $0. Each catalog item carries `ta` (boolean) from the console export: the Title picker on New quote lines shows only for `ta === true`. A bundle with no `ta` on any item hides the picker everywhere and the Price check and New screens say "Re-export the phone bundle to enable title add".
 
 Layout: the shell is `position:fixed; inset:0` (no `100dvh`, which left a gap under the tab bar on iOS); html, body and the tab bar share the dark background and the bar carries its own `padding-bottom: env(safe-area-inset-bottom)`.
 
